@@ -19,6 +19,10 @@ jobs:
       duckdb_version: v1.4.1
       ci_tools_version: v1.4.1
       extension_name: mongo
+      # Use a newer vcpkg commit that includes mongo-c-driver 1.30.6 with the CMP0042 fix.
+      # The default commit (ce613c41372b23b1f51333815feb3edd87ef8a8b) has mongo-c-driver 1.30.2
+      # which fails on macOS with CMake 4.0+ due to deprecated cmake_policy(SET CMP0042 OLD).
+      vcpkg_commit: '5de6d1ffae6f4576699acb79c102a0c3eec3a788'
 
   code-quality-check:
     name: Code Quality Check
