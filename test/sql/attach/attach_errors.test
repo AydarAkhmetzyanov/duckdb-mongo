@@ -1,0 +1,38 @@
+# name: test/sql/attach/attach_errors.test
+# description: Error handling tests for ATTACH
+# group: [sql]
+
+require mongo
+
+# Invalid connection string format (will fail when trying to connect)
+# Using key=value format, but with invalid values
+statement ok
+ATTACH 'host=invalidhost port=99999' AS mongo_db (TYPE MONGO);
+
+statement ok
+DETACH mongo_db;
+
+# Missing TYPE with mongodb:// URL (will try to open as file and fail)
+statement error
+ATTACH 'mongodb://localhost:27017' AS mongo_db;
+----
+Cannot open file
+
+# Duplicate database name
+statement ok
+ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
+
+statement error
+ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
+----
+already exists
+
+# Clean up
+statement ok
+DETACH mongo_db;
+
+# Invalid TYPE - Note: DuckDB tries to load it as an extension first
+statement error
+ATTACH 'host=localhost port=27017' AS mongo_db (TYPE INVALID);
+----
+

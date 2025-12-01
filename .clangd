@@ -1,0 +1,41 @@
+CompileFlags:
+  Add:
+    - -I${workspaceFolder}/src/include
+    - -I${workspaceFolder}/duckdb/src/include
+    - -I${workspaceFolder}/duckdb/third_party/fsst
+    - -I${workspaceFolder}/duckdb/third_party/fmt/include
+    - -I${workspaceFolder}/duckdb/third_party/hyperloglog
+    - -I${workspaceFolder}/duckdb/third_party/fastpforlib
+    - -I${workspaceFolder}/duckdb/third_party/skiplist
+    - -I${workspaceFolder}/duckdb/third_party/ska_sort
+    - -I${workspaceFolder}/duckdb/third_party/fast_float
+    - -I${workspaceFolder}/duckdb/third_party/re2
+    - -I${workspaceFolder}/duckdb/third_party/miniz
+    - -I${workspaceFolder}/duckdb/third_party/utf8proc/include
+    - -I${workspaceFolder}/duckdb/third_party/concurrentqueue
+    - -I${workspaceFolder}/duckdb/third_party/pcg
+    - -I${workspaceFolder}/duckdb/third_party/pdqsort
+    - -I${workspaceFolder}/duckdb/third_party/tdigest
+    - -I${workspaceFolder}/duckdb/third_party/mbedtls/include
+    - -I${workspaceFolder}/duckdb/third_party/jaro_winkler
+    - -I${workspaceFolder}/duckdb/third_party/vergesort
+    - -I${workspaceFolder}/duckdb/third_party/yyjson/include
+    - -I${workspaceFolder}/duckdb/third_party/zstd/include
+    - -I${workspaceFolder}/duckdb/third_party/libpg_query/include
+    - -I${workspaceFolder}/build/release/vcpkg_installed/arm64-osx/include
+    - -I${workspaceFolder}/build/release/vcpkg_installed/arm64-osx/include/bsoncxx/v_noabi
+    - -I${workspaceFolder}/build/release/vcpkg_installed/arm64-osx/include/mongocxx/v_noabi
+    - -DDUCKDB_BUILD_LIBRARY
+    - -DBSONCXX_STATIC
+    - -DMONGOCXX_STATIC
+    - -std=c++11
+  CompilationDatabase: build/release
+
+Index:
+  Background: Build
+
+Diagnostics:
+  ClangTidy:
+    Add: [*]
+    Remove: [modernize-use-trailing-return-type, readability-identifier-length]
+

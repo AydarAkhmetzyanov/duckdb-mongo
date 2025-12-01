@@ -1,0 +1,40 @@
+# name: test/sql/query/filters.test
+# description: Test filtering capabilities with mongo_scan
+# group: [sql]
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Test simple equality filter
+query I
+SELECT COUNT(*) FROM mongo_test.users WHERE active = true;
+----
+3
+
+# Test filter with WHERE clause
+query III
+SELECT name, email, age FROM mongo_test.users WHERE age > 28 ORDER BY age;
+----
+Alice	alice@example.com	30
+Charlie	charlie@example.com	35
+
+# Test filter with multiple conditions
+query III
+SELECT name, email, balance FROM mongo_test.users WHERE active = true AND balance > 1000 ORDER BY balance;
+----
+Alice	alice@example.com	1000.5
+Charlie	charlie@example.com	2000.75
+
+# Test filter on nested field (flattened)
+query III
+SELECT name, address_city, address_country FROM mongo_test.users WHERE address_city = 'New York';
+----
+Alice	New York	USA
+
+statement ok
+DETACH mongo_test;
+

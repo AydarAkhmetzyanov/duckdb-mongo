@@ -1,0 +1,34 @@
+# name: test/sql/query/basic.test
+# description: Basic query tests for mongo_scan function
+# group: [sql]
+
+require mongo
+
+# Test that mongo_scan function exists and is a table function
+query I
+SELECT COUNT(*) FROM duckdb_functions() 
+WHERE function_name = 'mongo_scan'
+  AND function_type = 'table';
+----
+1
+
+# Test basic query with MongoDB (requires test database)
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+query I
+SELECT COUNT(*) FROM mongo_test.users;
+----
+4
+
+query III
+SELECT name, email, age FROM mongo_test.users ORDER BY name LIMIT 3;
+----
+Alice	alice@example.com	30
+Bob	bob@example.com	25
+Charlie	charlie@example.com	35
+
+statement ok
+DETACH mongo_test;

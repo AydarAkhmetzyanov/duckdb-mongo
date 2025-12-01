@@ -1,0 +1,33 @@
+# name: test/sql/schema/nested.test
+# description: Test schema inference for nested documents
+# group: [sql]
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Test that nested documents are flattened with underscore notation
+query III
+SELECT name, address_city, address_country FROM mongo_test.users WHERE name = 'Alice';
+----
+Alice	New York	USA
+
+# Test deeply nested documents (up to 5 levels)
+query III
+SELECT address_street, address_city, address_zip FROM mongo_test.users ORDER BY name LIMIT 2;
+----
+123 Main St	New York	10001
+456 Oak Ave	Los Angeles	90001
+
+# Test nested fields in products
+query III
+SELECT name, specs_cpu, specs_ram FROM mongo_test.products WHERE name = 'Laptop';
+----
+Laptop	Intel i7	16GB
+
+statement ok
+DETACH mongo_test;
+

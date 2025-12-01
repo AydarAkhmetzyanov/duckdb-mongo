@@ -1,0 +1,51 @@
+# name: test/sql/query/aggregations.test
+# description: Test aggregation queries with mongo_scan
+# group: [sql]
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Test COUNT
+query I
+SELECT COUNT(*) FROM mongo_test.users;
+----
+4
+
+# Test COUNT with WHERE clause
+query I
+SELECT COUNT(*) FROM mongo_test.users WHERE active = true;
+----
+3
+
+# Test AVG aggregation (returns DOUBLE)
+query R
+SELECT AVG(age) FROM mongo_test.users;
+----
+29.5
+
+# Test SUM aggregation  
+query R
+SELECT SUM(balance) FROM mongo_test.users;
+----
+4251.5
+
+# Test MIN/MAX aggregations
+query II
+SELECT MIN(age), MAX(age) FROM mongo_test.users;
+----
+25	35
+
+# Test GROUP BY
+query II
+SELECT active, COUNT(*) FROM mongo_test.users GROUP BY active ORDER BY active;
+----
+false	1
+true	3
+
+statement ok
+DETACH mongo_test;
+

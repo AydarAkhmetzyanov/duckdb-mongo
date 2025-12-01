@@ -1,0 +1,48 @@
+# name: test/sql/attach/attach_connection.test
+# description: Test various connection string formats
+# group: [sql]
+
+require mongo
+
+# Basic connection string with key=value format (recommended)
+statement ok
+ATTACH 'host=localhost port=27017' AS mongo1 (TYPE MONGO);
+
+statement ok
+DETACH mongo1;
+
+# Connection string with database name
+statement ok
+ATTACH 'host=localhost port=27017 dbname=testdb' AS mongo2 (TYPE MONGO);
+
+statement ok
+DETACH mongo2;
+
+# Connection string with authentication
+# Note: This will fail if credentials are wrong, but syntax should work
+statement ok
+ATTACH 'host=localhost port=27017 user=testuser password=testpass' AS mongo3 (TYPE MONGO);
+
+statement ok
+DETACH mongo3;
+
+# Connection string with authentication source
+statement ok
+ATTACH 'host=localhost port=27017 user=testuser password=testpass authsource=admin' AS mongo4 (TYPE MONGO);
+
+statement ok
+DETACH mongo4;
+
+# Test MongoDB URI format - Note: This still fails because DuckDB tries to open it as a file
+# The key=value format is recommended instead
+# statement ok
+# ATTACH 'mongodb://localhost:27017' AS mongo5 (TYPE MONGO);
+# statement ok
+# DETACH mongo5;
+
+# Test that TYPE is required for mongodb:// URLs (will try to open as file and fail)
+statement error
+ATTACH 'mongodb://localhost:27017' AS mongo6;
+----
+Cannot open file
+

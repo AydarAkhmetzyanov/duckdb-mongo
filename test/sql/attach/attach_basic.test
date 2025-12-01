@@ -1,0 +1,33 @@
+# name: test/sql/attach/attach_basic.test
+# description: Basic ATTACH functionality tests
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require mongo
+
+# Test basic ATTACH with key=value format (recommended)
+statement ok
+ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
+
+# Verify database was attached
+query I
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name = 'mongo_db';
+----
+1
+
+# Test DETACH
+statement ok
+DETACH mongo_db;
+
+# Verify database was detached
+query I
+SELECT COUNT(*) FROM duckdb_databases() WHERE database_name = 'mongo_db';
+----
+0
+
+# Test that mongo_scan function still works
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'mongo_scan';
+----
+1
+

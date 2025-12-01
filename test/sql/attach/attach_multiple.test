@@ -1,0 +1,49 @@
+# name: test/sql/attach/attach_multiple.test
+# description: Test attaching multiple MongoDB instances
+# group: [sql]
+
+require mongo
+
+# Attach first database
+statement ok
+ATTACH 'host=localhost port=27017' AS mongo1 (TYPE MONGO);
+
+# Attach second database (same connection, different name)
+statement ok
+ATTACH 'host=localhost port=27017' AS mongo2 (TYPE MONGO);
+
+# Verify both appear
+query I
+SELECT COUNT(*) FROM duckdb_databases() 
+WHERE database_name IN ('mongo1', 'mongo2');
+----
+2
+
+# Attach third database with different connection parameters
+statement ok
+ATTACH 'host=localhost port=27017 dbname=testdb' AS mongo3 (TYPE MONGO);
+
+# Verify all three appear
+query I
+SELECT COUNT(*) FROM duckdb_databases() 
+WHERE database_name IN ('mongo1', 'mongo2', 'mongo3');
+----
+3
+
+# Clean up
+statement ok
+DETACH mongo1;
+
+statement ok
+DETACH mongo2;
+
+statement ok
+DETACH mongo3;
+
+# Verify all detached
+query I
+SELECT COUNT(*) FROM duckdb_databases() 
+WHERE database_name IN ('mongo1', 'mongo2', 'mongo3');
+----
+0
+

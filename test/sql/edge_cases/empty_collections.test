@@ -1,0 +1,26 @@
+# name: test/sql/edge_cases/empty_collections.test
+# description: Test edge cases with empty collections
+# group: [sql]
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Test querying empty collection (should return 0 rows)
+query I
+SELECT COUNT(*) FROM mongo_test.empty_collection;
+----
+0
+
+# Test COUNT on empty collection (should return 0)
+query I
+SELECT COUNT(*) FROM mongo_test.empty_collection;
+----
+0
+
+statement ok
+DETACH mongo_test;
+

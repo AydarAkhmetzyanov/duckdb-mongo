@@ -1,0 +1,203 @@
+#!/bin/bash
+# Script to create test MongoDB database with sample data
+# This sets up a MongoDB database similar to how duckdb-postgres sets up Postgres
+
+set -e
+
+MONGO_HOST=${MONGO_HOST:-localhost}
+MONGO_PORT=${MONGO_PORT:-27017}
+MONGO_DB=${MONGO_DB:-duckdb_mongo_test}
+
+echo "Creating test MongoDB database: $MONGO_DB"
+
+# Check if mongosh is available
+if ! command -v mongosh &> /dev/null; then
+    echo "Error: mongosh is not installed. Please install MongoDB shell."
+    echo "On macOS: brew install mongosh"
+    exit 1
+fi
+
+# Create test database and collections with sample data
+mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+// Drop database if it exists
+db.dropDatabase();
+
+// Create users collection with various data types
+db.users.insertMany([
+  {
+    _id: ObjectId('507f1f77bcf86cd799439011'),
+    name: 'Alice',
+    email: 'alice@example.com',
+    age: 30,
+    active: true,
+    balance: 1000.50,
+    tags: ['admin', 'user'],
+    address: {
+      street: '123 Main St',
+      city: 'New York',
+      zip: '10001',
+      country: 'USA'
+    },
+    created_at: new Date('2023-01-01T00:00:00Z')
+  },
+  {
+    _id: ObjectId('507f1f77bcf86cd799439012'),
+    name: 'Bob',
+    email: 'bob@example.com',
+    age: 25,
+    active: false,
+    balance: 500.25,
+    tags: ['user'],
+    address: {
+      street: '456 Oak Ave',
+      city: 'Los Angeles',
+      zip: '90001',
+      country: 'USA'
+    },
+    created_at: new Date('2023-02-01T00:00:00Z')
+  },
+  {
+    _id: ObjectId('507f1f77bcf86cd799439013'),
+    name: 'Charlie',
+    email: 'charlie@example.com',
+    age: 35,
+    active: true,
+    balance: 2000.75,
+    tags: ['admin', 'premium'],
+    address: {
+      street: '789 Pine Rd',
+      city: 'Chicago',
+      zip: '60601',
+      country: 'USA'
+    },
+    created_at: new Date('2023-03-01T00:00:00Z')
+  },
+  {
+    name: 'Diana',
+    email: 'diana@example.com',
+    age: 28,
+    active: true,
+    balance: 750.00,
+    tags: ['user'],
+    address: {
+      street: '321 Elm St',
+      city: 'Houston',
+      zip: '77001',
+      country: 'USA'
+    },
+    created_at: new Date('2023-04-01T00:00:00Z')
+  }
+]);
+
+// Create products collection
+db.products.insertMany([
+  {
+    name: 'Laptop',
+    category: 'Electronics',
+    price: 999.99,
+    in_stock: true,
+    quantity: 50,
+    specs: {
+      cpu: 'Intel i7',
+      ram: '16GB',
+      storage: '512GB SSD'
+    },
+    tags: ['computer', 'electronics', 'laptop']
+  },
+  {
+    name: 'Mouse',
+    category: 'Electronics',
+    price: 29.99,
+    in_stock: true,
+    quantity: 200,
+    specs: {
+      type: 'Wireless',
+      dpi: 1600
+    },
+    tags: ['computer', 'accessories']
+  },
+  {
+    name: 'Desk',
+    category: 'Furniture',
+    price: 299.99,
+    in_stock: false,
+    quantity: 0,
+    specs: {
+      material: 'Wood',
+      dimensions: {
+        width: 120,
+        height: 75,
+        depth: 60
+      }
+    },
+    tags: ['furniture', 'office']
+  }
+]);
+
+// Create orders collection with nested arrays
+db.orders.insertMany([
+  {
+    order_id: 'ORD-001',
+    customer_id: ObjectId('507f1f77bcf86cd799439011'),
+    items: [
+      { product: 'Laptop', quantity: 1, price: 999.99 },
+      { product: 'Mouse', quantity: 2, price: 29.99 }
+    ],
+    total: 1059.97,
+    status: 'completed',
+    order_date: new Date('2023-05-01T00:00:00Z')
+  },
+  {
+    order_id: 'ORD-002',
+    customer_id: ObjectId('507f1f77bcf86cd799439012'),
+    items: [
+      { product: 'Desk', quantity: 1, price: 299.99 }
+    ],
+    total: 299.99,
+    status: 'pending',
+    order_date: new Date('2023-05-02T00:00:00Z')
+  }
+]);
+
+// Create empty collection for testing (just create the collection, don't insert empty array)
+db.createCollection('empty_collection');
+
+// Create collection with type conflicts (same field, different types)
+db.type_conflicts.insertMany([
+  { id: '123', value: 'string' },
+  { id: 456, value: 789 },
+  { id: true, value: false }
+]);
+
+// Create collection with deeply nested documents
+db.deeply_nested.insertMany([
+  {
+    level1: {
+      level2: {
+        level3: {
+          level4: {
+            level5: {
+              level6: {
+                value: 'deep value'
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]);
+
+print('Test database created successfully!');
+print('Database: ' + db.getName());
+print('Collections: ' + db.getCollectionNames().join(', '));
+"
+
+echo ""
+echo "Test MongoDB database '$MONGO_DB' created successfully!"
+echo "Collections: users, products, orders, empty_collection, type_conflicts, deeply_nested"
+echo ""
+echo "To use in tests, set:"
+echo "  export MONGODB_TEST_DATABASE_AVAILABLE=1"
+echo "  export MONGO_TEST_CONNECTION='mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB'"
+

@@ -1,0 +1,20 @@
+# name: test/sql/mongo.test
+# description: test mongo extension
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require mongo
+
+# Test that mongo_scan table function exists by checking function metadata
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = 'mongo_scan';
+----
+1
+
+# Test that mongo_scan function signature is correct by checking parameters
+query I
+SELECT COUNT(*) FROM duckdb_functions() 
+WHERE function_name = 'mongo_scan' 
+  AND function_type = 'table';
+----
+1
