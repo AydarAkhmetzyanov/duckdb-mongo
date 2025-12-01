@@ -9,7 +9,6 @@ testext
 test/python/__pycache__/
 .Rhistory
 *.code-workspace
-.clang-format
 .clang-tidy
 .editorconfig
 host=*
