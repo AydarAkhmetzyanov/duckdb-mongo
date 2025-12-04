@@ -346,7 +346,8 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				str_val = "null";
 			} else if (element.type() == bsoncxx::type::k_binary) {
 				// Binary data - convert to base64 or hex representation
-				auto binary = element.get_binary();
+				// For now, just indicate binary data exists
+				// TODO: Could convert to base64 using the binary data if needed
 				str_val = "<binary data>";
 			} else if (element.type() == bsoncxx::type::k_undefined) {
 				str_val = "undefined";

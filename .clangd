@@ -2,6 +2,8 @@ CompileFlags:
   Add:
     - -I${workspaceFolder}/src/include
     - -I${workspaceFolder}/duckdb/src/include
+    - -I${workspaceFolder}/duckdb/test/include
+    - -I${workspaceFolder}/duckdb/third_party/catch
     - -I${workspaceFolder}/duckdb/third_party/fsst
     - -I${workspaceFolder}/duckdb/third_party/fmt/include
     - -I${workspaceFolder}/duckdb/third_party/hyperloglog

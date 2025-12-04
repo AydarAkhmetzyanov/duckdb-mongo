@@ -90,21 +90,37 @@ unique_ptr<Catalog> MongoStorageAttach(optional_ptr<StorageExtensionInfo> storag
 			}
 		}
 	} else {
-		// Extract database name from MongoDB URI if present
-		// Format: mongodb://host:port/database
-		size_t db_start = connection_string.find_last_of('/');
-		if (db_start != string::npos && db_start < connection_string.length() - 1) {
-			size_t db_end = connection_string.find_first_of('?', db_start + 1);
-			if (db_end == string::npos) {
-				db_end = connection_string.length();
+		// Extract database name from MongoDB URI if present.
+		// Format: mongodb://[user:pass@]host[:port]/database[?options]
+		// or: mongodb+srv://[user:pass@]host/database[?options]
+		// We need to find the path component after the host, not just any '/'.
+
+		// First, find where the host part starts (after "://" and optionally after "@").
+		size_t scheme_end = connection_string.find("://");
+		if (scheme_end != string::npos) {
+			size_t host_start = scheme_end + 3; // Skip "://"
+
+			// If there's an "@", the host starts after it (credentials are before).
+			size_t at_pos = connection_string.find('@', host_start);
+			if (at_pos != string::npos) {
+				host_start = at_pos + 1;
 			}
-			if (db_end > db_start + 1) {
-				database_name = connection_string.substr(db_start + 1, db_end - db_start - 1);
+
+			// Now find the "/" after the host (which would indicate a database path).
+			size_t db_start = connection_string.find('/', host_start);
+			if (db_start != string::npos && db_start < connection_string.length() - 1) {
+				size_t db_end = connection_string.find_first_of('?', db_start + 1);
+				if (db_end == string::npos) {
+					db_end = connection_string.length();
+				}
+				if (db_end > db_start + 1) {
+					database_name = connection_string.substr(db_start + 1, db_end - db_start - 1);
+				}
 			}
 		}
 	}
 
-	// Create MongoDB catalog
+	// Create MongoDB catalog.
 	auto catalog = make_uniq<MongoCatalog>(db, connection_string, database_name);
 	catalog->Initialize(false);
 

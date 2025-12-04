@@ -1,19 +1,27 @@
 #pragma once
 
-#include "duckdb/catalog/duck_catalog.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/storage/database_size.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "mongo_instance.hpp"
+#include "mongo_schema_entry.hpp"
 #include <mongocxx/client.hpp>
 
 namespace duckdb {
 
-class MongoCatalog : public DuckCatalog {
+class MongoCatalog : public Catalog {
 public:
 	explicit MongoCatalog(AttachedDatabase &db, const string &connection_string, const string &database_name = "");
 
 	string connection_string;
 	string database_name; // Specific database to use (empty means all databases)
+	string default_schema; // Default schema name (set during ScanSchemas)
+
+	void Initialize(bool load_builtin) override;
+	string GetCatalogType() override {
+		return "mongo";
+	}
 
 	// Override to list MongoDB databases as schemas
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
@@ -22,10 +30,20 @@ public:
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
 
-	// Override to prevent DuckDB from creating local storage files for this catalog.
-	bool IsDuckCatalog() override {
-		return false;
-	}
+	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+
+	// Physical plan methods - MongoDB is read-only for now
+	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
+	                                    PhysicalOperator &plan) override;
+	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+	                             optional_ptr<PhysicalOperator> plan) override;
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                            PhysicalOperator &plan) override;
+	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+	                            PhysicalOperator &plan) override;
+
+	void DropSchema(ClientContext &context, DropInfo &info) override;
+
 
 	// Override to prevent accessing non-existent storage manager.
 	bool InMemory() override {
@@ -59,12 +77,13 @@ public:
 		return string();
 	}
 
-	// Get default schema name (when dbname is specified, return the database name as the default schema)
+	// Get default schema name (similar to Postgres extension)
 	string GetDefaultSchema() const override {
-		// When a specific database is specified, return that database name as the schema name
-		// This allows queries like mongo_test.users to work (where mongo_test is the attached DB)
-		// and users is the collection, which will be found in the schema named after the MongoDB database
-		return database_name.empty() ? "" : database_name;
+		if (!default_schema.empty()) {
+			return default_schema;
+		}
+		// If no default schema set yet, return database_name if specified, or empty
+		return database_name;
 	}
 
 	// Get MongoDB client
@@ -72,6 +91,11 @@ public:
 		GetMongoInstance(); // Ensure instance is initialized
 		return mongocxx::client(mongocxx::uri(connection_string));
 	}
+
+private:
+	mutable mutex schemas_lock;
+	unordered_map<string, shared_ptr<MongoSchemaEntry>> schemas;
+	bool schemas_scanned;
 };
 
 } // namespace duckdb

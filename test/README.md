@@ -75,3 +75,104 @@ Or directly:
 ```bash
 bash scripts/cleanup_test_files.sh
 ```
+## C++ Integration Tests
+
+In addition to SQL logic tests, this extension includes C++ integration tests for testing connectivity to real MongoDB instances, including MongoDB Atlas.
+
+### MongoDB Atlas Integration Test
+
+The Atlas integration test (`test/integration/test_atlas_integration.cpp`) tests connectivity and basic operations against a MongoDB Atlas cluster. This test is useful for verifying that the extension works correctly with cloud-hosted MongoDB instances.
+
+#### Prerequisites
+
+1. A MongoDB Atlas account with a cluster
+2. Atlas credentials (username and password)
+3. Network access configured to allow connections from your IP
+
+#### Running the Atlas Integration Test
+
+The easiest way to run the Atlas integration test is using the provided script:
+
+```bash
+# Set your Atlas credentials
+export MONGO_ATLAS_USERNAME='your-username'
+export MONGO_ATLAS_PASSWORD='your-password'
+
+# Run the integration test
+bash test/run-atlas-integration-test.sh
+```
+
+The script will:
+1. Check for required environment variables
+2. Build the extension with C++ unit tests enabled (if not already built)
+3. Run the Atlas integration test
+4. Report the results
+
+#### Manual Build and Run
+
+If you prefer to build and run manually:
+
+1. **Build with C++ unit tests enabled**:
+   ```bash
+   # The extension Makefile hardcodes ENABLE_UNITTEST_CPP_TESTS=FALSE
+   # so we need to use CMake directly to enable it
+   mkdir -p build/release
+   cd build/release
+   cmake -DENABLE_UNITTEST_CPP_TESTS=TRUE -GNinja ../..
+   ninja test_atlas_integration
+   cd ../..
+   ```
+
+2. **Set environment variables**:
+   ```bash
+   export MONGO_ATLAS_USERNAME='your-username'
+   export MONGO_ATLAS_PASSWORD='your-password'
+   ```
+
+3. **Run the test executable**:
+   ```bash
+   ./build/release/extension/mongo/test_atlas_integration "[mongo][atlas][integration]"
+   ```
+
+#### Test Coverage
+
+The Atlas integration test covers:
+- ATTACH command with MongoDB Atlas connection string (mongodb+srv://)
+- Database listing and verification
+- Schema enumeration
+- Table (collection) listing
+- Basic SELECT queries
+- mongo_scan table function
+- DETACH command
+
+#### Skipping the Test
+
+If the required environment variables (`MONGO_ATLAS_USERNAME` and `MONGO_ATLAS_PASSWORD`) are not set, the test will be automatically skipped without failing.
+
+#### Adding More Integration Tests
+
+To add additional C++ integration tests:
+
+1. Create a new `.cpp` file in `test/integration/`
+2. Use the Catch2 test framework (same as DuckDB core tests)
+3. Include appropriate test tags for filtering
+4. Update `CMakeLists.txt` if needed to add the new test executable
+
+Example test structure:
+```cpp
+#define CATCH_CONFIG_RUNNER
+#include "catch.hpp"
+#include "duckdb.hpp"
+
+// Helper macro for checking query success
+#define REQUIRE_NO_FAIL(result) REQUIRE(!(result)->HasError())
+
+// Simple main function for running the test
+int main(int argc, char* argv[]) {
+    return Catch::Session().run(argc, argv);
+}
+
+TEST_CASE("My Integration Test", "[mongo][integration]") {
+    // Your test code here
+}
+```
