@@ -17,6 +17,8 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/exception.hpp"
+#include <chrono>
+#include <iostream>
 namespace duckdb {
 
 MongoSchemaEntry::MongoSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
@@ -129,6 +131,8 @@ void MongoSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 }
 
 void MongoSchemaEntry::TryLoadEntries(ClientContext &context) {
+	auto start_total = std::chrono::high_resolution_clock::now();
+	
 	if (is_loaded) {
 		return;
 	}
@@ -144,66 +148,92 @@ void MongoSchemaEntry::TryLoadEntries(ClientContext &context) {
 		return; // Double-check after acquiring lock
 	}
 	
-	// Load all collections and create views
+	// Load collection names only - views are created lazily in Scan() or LookupEntry()
 	vector<string> collection_names;
 	try {
-		// GetDefaultEntries may connect to MongoDB - catch any timeouts/errors
-		// The connection has a 10 second timeout to prevent hanging
+		auto start_get_entries = std::chrono::high_resolution_clock::now();
 		collection_names = default_generator->GetDefaultEntries();
+		auto end_get_entries = std::chrono::high_resolution_clock::now();
+		auto get_entries_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_get_entries - start_get_entries).count();
+		std::cerr << "[MongoSchemaEntry] GetDefaultEntries took " << get_entries_ms << "ms, found " << collection_names.size() << " collections" << std::endl;
 	} catch (const std::exception &e) {
-		// MongoDB connection error, timeout, or other standard exceptions
-		// Mark as loaded (even if empty) to prevent retrying
 		is_loaded = true;
 		return;
 	} catch (...) {
-		// Any other exception - mark as loaded to prevent retrying
 		is_loaded = true;
 		return;
 	}
 	
-	// Create views for all collections (without holding entry_lock during creation)
-	vector<shared_ptr<CatalogEntry>> new_entries;
-	for (const auto &collection_name : collection_names) {
+	lock_guard<mutex> entry_guard(entry_lock);
+	loaded_collection_names = collection_names;
+	
+	is_loaded = true;
+	auto end_total = std::chrono::high_resolution_clock::now();
+	auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_total - start_total).count();
+	std::cerr << "[MongoSchemaEntry] TryLoadEntries total time: " << total_ms << "ms" << std::endl;
+}
+
+shared_ptr<CatalogEntry> MongoSchemaEntry::GetOrCreateViewEntry(ClientContext &context, const string &collection_name) {
+	lock_guard<mutex> lock(entry_lock);
+	
+	// Check if entry already exists
+	auto it = views.find(collection_name);
+	if (it != views.end()) {
+		return it->second;
+	}
+	
+	// Create entry lazily
+	if (default_generator) {
 		try {
 			auto default_entry = default_generator->CreateDefaultEntry(context, collection_name);
 			if (default_entry) {
 				auto view_entry = dynamic_cast<ViewCatalogEntry *>(default_entry.get());
 				if (view_entry) {
-					new_entries.push_back(shared_ptr<CatalogEntry>(default_entry.release()));
+					auto shared_entry = shared_ptr<CatalogEntry>(default_entry.release());
+					views[collection_name] = shared_entry;
+					return shared_entry;
 				}
 			}
 		} catch (...) {
-			// Skip this collection if creation fails
-			continue;
+			// If creation fails, return nullptr
+			return nullptr;
 		}
 	}
 	
-	// Now add all entries to views map while holding entry_lock
-	lock_guard<mutex> entry_guard(entry_lock);
-	for (auto &entry : new_entries) {
-		auto view_entry = dynamic_cast<ViewCatalogEntry *>(entry.get());
-		if (view_entry) {
-			string name = view_entry->name;
-			if (views.find(name) == views.end()) {
-				views[name] = entry;
-			}
-		}
-	}
-	
-	is_loaded = true;
+	return nullptr;
 }
 
 void MongoSchemaEntry::Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) {
-	// SHOW TABLES queries both TABLE_ENTRY and VIEW_ENTRY
-	// Collections are represented as views, so handle both types
+	// Collections are represented as views, handle both TABLE_ENTRY and VIEW_ENTRY
 	if (type == CatalogType::VIEW_ENTRY || type == CatalogType::TABLE_ENTRY) {
-		// Load entries if not already loaded (Postgres pattern)
-		TryLoadEntries(context);
+		if (!is_loaded) {
+			TryLoadEntries(context);
+		}
 		
-		// Now just iterate through already-loaded views
-		lock_guard<mutex> lock(entry_lock);
-		for (auto &[name, entry] : views) {
-			callback(*entry);
+		vector<string> collections_to_create;
+		{
+			lock_guard<mutex> lock(entry_lock);
+			for (auto &[name, entry] : views) {
+				callback(*entry);
+			}
+			for (const auto &collection_name : loaded_collection_names) {
+				if (views.find(collection_name) == views.end()) {
+					collections_to_create.push_back(collection_name);
+				}
+			}
+		}
+		
+		auto start_scan_create = std::chrono::high_resolution_clock::now();
+		for (const auto &collection_name : collections_to_create) {
+			auto entry = GetOrCreateViewEntry(context, collection_name);
+			if (entry) {
+				callback(*entry);
+			}
+		}
+		auto end_scan_create = std::chrono::high_resolution_clock::now();
+		auto scan_create_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_scan_create - start_scan_create).count();
+		if (scan_create_ms > 100) {
+			std::cerr << "[MongoSchemaEntry] Scan() created " << collections_to_create.size() << " view entries in " << scan_create_ms << "ms" << std::endl;
 		}
 	}
 }

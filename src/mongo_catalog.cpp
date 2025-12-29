@@ -17,67 +17,93 @@
 #include <bsoncxx/builder/basic/document.hpp>
 #include <mongocxx/exception/exception.hpp>
 #include <mongocxx/client.hpp>
+#include <chrono>
+#include <iostream>
 
 namespace duckdb {
+
+// Forward declaration
+class MongoCatalog;
 
 // Default generator for MongoDB collections (creates views dynamically).
 class MongoCollectionGenerator : public DefaultGenerator {
 public:
 	MongoCollectionGenerator(Catalog &catalog, SchemaCatalogEntry &schema, const string &connection_string_p,
-	                         const string &database_name_p)
+	                         const string &database_name_p, MongoCatalog *mongo_catalog_p = nullptr)
 	    : DefaultGenerator(catalog), schema(schema), connection_string(connection_string_p),
-	      database_name(database_name_p), collections_loaded(false) {
-		// Ensure MongoDB instance is initialized before creating any clients.
+	      database_name(database_name_p), collections_loaded(false), mongo_catalog(mongo_catalog_p) {
 		GetMongoInstance();
-		// Note: We don't list collections here to avoid authorization errors.
-		// Collections will be listed lazily when GetDefaultEntries() is called.
+		// Pre-warm connection to reduce latency on first SHOW TABLES
+		try {
+			GetOrCreateClient();
+		} catch (...) {
+			// Connection will be retried when actually needed
+		}
 	}
 
 public:
 	unique_ptr<CatalogEntry> CreateDefaultEntry(ClientContext &context, const string &entry_name) override {
-		// Ensure collections are loaded.
 		EnsureCollectionsLoaded();
-
-		// Check if entry_name is a collection.
 		for (const auto &collection_name : collection_names) {
 			if (StringUtil::CIEquals(entry_name, collection_name)) {
-				// Create a view that uses mongo_scan.
-				auto result = make_uniq<CreateViewInfo>();
-				result->schema = schema.name;
-				result->view_name = collection_name;
-				// Escape single quotes in strings.
-				auto escape_sql_string = [](const string &str) -> string {
-					string result;
-					for (char c : str) {
-						if (c == '\'') {
-							result += "''";
-						} else {
-							result += c;
-						}
-					}
-					return result;
-				};
-				result->sql = StringUtil::Format("SELECT * FROM mongo_scan('%s', '%s', '%s')",
-				                                 escape_sql_string(connection_string), escape_sql_string(database_name),
-				                                 escape_sql_string(collection_name));
-				auto view_info = CreateViewInfo::FromSelect(context, std::move(result));
-				return make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *view_info);
+				return CreateEntryForCollection(context, collection_name);
 			}
 		}
 		return nullptr;
 	}
 
 	vector<string> GetDefaultEntries() override {
-		// Try to list collections, but catch authorization errors.
 		EnsureCollectionsLoaded();
 		return collection_names;
 	}
 
+	unique_ptr<CatalogEntry> CreateEntryForCollection(ClientContext &context, const string &collection_name) {
+		auto result = make_uniq<CreateViewInfo>();
+		result->schema = schema.name;
+		result->view_name = collection_name;
+		
+		auto escape_sql_string = [](const string &str) -> string {
+			string result;
+			for (char c : str) {
+				if (c == '\'') {
+					result += "''";
+				} else {
+					result += c;
+				}
+			}
+			return result;
+		};
+		
+		if (cached_escaped_connection_string.empty()) {
+			cached_escaped_connection_string = escape_sql_string(connection_string);
+			cached_escaped_database_name = escape_sql_string(database_name);
+		}
+		string escaped_collection_name = escape_sql_string(collection_name);
+		
+		result->sql = StringUtil::Format("SELECT * FROM mongo_scan('%s', '%s', '%s')",
+		                                 cached_escaped_connection_string, cached_escaped_database_name,
+		                                 escaped_collection_name);
+		auto start_parse = std::chrono::high_resolution_clock::now();
+		auto view_info = CreateViewInfo::FromSelect(context, std::move(result));
+		auto end_parse = std::chrono::high_resolution_clock::now();
+		auto parse_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_parse - start_parse).count();
+		if (parse_ms > 10) {
+			std::cerr << "[MongoCollectionGenerator] CreateEntryForCollection('" << collection_name << "') SQL parsing took " << parse_ms << "ms" << std::endl;
+		}
+		auto start_create = std::chrono::high_resolution_clock::now();
+		auto entry = make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *view_info);
+		auto end_create = std::chrono::high_resolution_clock::now();
+		auto create_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_create - start_create).count();
+		if (create_ms > 10) {
+			std::cerr << "[MongoCollectionGenerator] CreateEntryForCollection('" << collection_name << "') ViewCatalogEntry creation took " << create_ms << "ms" << std::endl;
+		}
+		return entry;
+	}
+
 private:
 	mongocxx::client& GetOrCreateClient() {
-		// Cache the client connection to avoid recreating it on every call
 		if (!cached_client || cached_connection_string != connection_string) {
-			// Add connection timeout if not already present (10 seconds to allow for slow connections)
+			auto start_conn = std::chrono::high_resolution_clock::now();
 			string conn_str = connection_string;
 			bool has_query_params = conn_str.find('?') != string::npos;
 			
@@ -89,7 +115,6 @@ private:
 					conn_str += "&connectTimeoutMS=10000";
 				}
 			}
-			// Also add server selection timeout
 			if (conn_str.find("serverSelectionTimeoutMS") == string::npos) {
 				if (!has_query_params) {
 					conn_str += "?serverSelectionTimeoutMS=10000";
@@ -101,6 +126,9 @@ private:
 			mongocxx::uri uri(conn_str);
 			cached_client = make_uniq<mongocxx::client>(uri);
 			cached_connection_string = connection_string;
+			auto end_conn = std::chrono::high_resolution_clock::now();
+			auto conn_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_conn - start_conn).count();
+			std::cerr << "[MongoCollectionGenerator] MongoDB connection creation took " << conn_ms << "ms" << std::endl;
 		}
 		return *cached_client;
 	}
@@ -109,23 +137,42 @@ private:
 		if (collections_loaded) {
 			return;
 		}
+		
+		if (mongo_catalog) {
+			auto cached = mongo_catalog->GetCachedCollectionNames(database_name);
+			if (!cached.empty()) {
+				collection_names = cached;
+				collections_loaded = true;
+				std::cerr << "[MongoCollectionGenerator] Using cached collection names for database '" << database_name << "' (" << cached.size() << " collections)" << std::endl;
+				return;
+			}
+		}
+		
 		collections_loaded = true;
 
-		// Try to list collections, but catch authorization errors and timeouts.
 		try {
 			auto& client = GetOrCreateClient();
 			auto mongo_db = client[database_name];
+			auto start_list = std::chrono::high_resolution_clock::now();
 			auto collections = mongo_db.list_collection_names();
+			auto end_list = std::chrono::high_resolution_clock::now();
+			auto list_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_list - start_list).count();
+			std::cerr << "[MongoCollectionGenerator] list_collection_names() took " << list_ms << "ms" << std::endl;
+			
+			vector<string> filtered_collections;
 			for (const auto &collection : collections) {
-				// Skip system collections to avoid authorization errors.
 				if (StringUtil::StartsWith(collection, "system.")) {
 					continue;
 				}
+				filtered_collections.push_back(collection);
 				collection_names.push_back(collection);
 			}
+			
+			if (mongo_catalog && !filtered_collections.empty()) {
+				mongo_catalog->CacheCollectionNames(database_name, filtered_collections);
+			}
 		} catch (...) {
-			// Authorization error, timeout, or other MongoDB error - just leave collection_names empty.
-			// Users can still query specific collections directly if they know the name.
+			// Leave collection_names empty on error
 		}
 	}
 
@@ -134,9 +181,13 @@ private:
 	string database_name;
 	vector<string> collection_names;
 	bool collections_loaded;
+	MongoCatalog *mongo_catalog; // Reference to catalog for shared caching
 	// Cache the MongoDB client connection to avoid recreating it
 	unique_ptr<mongocxx::client> cached_client;
 	string cached_connection_string;
+	// Cache escaped strings to avoid re-escaping on every entry creation
+	string cached_escaped_connection_string;
+	string cached_escaped_database_name;
 };
 
 MongoCatalog::MongoCatalog(AttachedDatabase &db, const string &connection_string, const string &database_name)
@@ -260,7 +311,7 @@ void MongoCatalog::ScanSchemas(ClientContext &context, std::function<void(Schema
 				// Always set the default generator, even if schema already existed.
 				// This ensures collections are accessible.
 				auto default_generator =
-				    make_uniq<MongoCollectionGenerator>(*this, schema, connection_string, generator_db_name);
+				    make_uniq<MongoCollectionGenerator>(*this, schema, connection_string, generator_db_name, this);
 				schema.SetDefaultGenerator(std::move(default_generator));
 
 				callback(schema);
@@ -338,7 +389,7 @@ optional_ptr<SchemaCatalogEntry> MongoCatalog::LookupSchema(CatalogTransaction t
 					auto &schema_ref = schema_entry->Cast<MongoSchemaEntry>();
 					// Set up default generator for collections in this schema.
 					auto default_generator =
-					    make_uniq<MongoCollectionGenerator>(*this, schema_ref, connection_string, mongo_db_name);
+					    make_uniq<MongoCollectionGenerator>(*this, schema_ref, connection_string, mongo_db_name, this);
 					schema_ref.SetDefaultGenerator(std::move(default_generator));
 					schema = &schema_ref;
 				}
@@ -383,6 +434,20 @@ void MongoCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	} else if (info.if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
 		throw CatalogException("Schema with name \"%s\" not found", info.name);
 	}
+}
+
+vector<string> MongoCatalog::GetCachedCollectionNames(const string &db_name) const {
+	lock_guard<mutex> lock(collection_cache_lock);
+	auto it = collection_cache.find(db_name);
+	if (it != collection_cache.end()) {
+		return it->second;
+	}
+	return vector<string>();
+}
+
+void MongoCatalog::CacheCollectionNames(const string &db_name, const vector<string> &collections) {
+	lock_guard<mutex> lock(collection_cache_lock);
+	collection_cache[db_name] = collections;
 }
 
 } // namespace duckdb

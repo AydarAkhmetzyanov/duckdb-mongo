@@ -92,10 +92,18 @@ public:
 		return mongocxx::client(mongocxx::uri(connection_string));
 	}
 
+	// Get cached collection names for a database (shared across schemas)
+	vector<string> GetCachedCollectionNames(const string &db_name) const;
+	// Cache collection names for a database
+	void CacheCollectionNames(const string &db_name, const vector<string> &collections);
+
 private:
 	mutable mutex schemas_lock;
 	unordered_map<string, shared_ptr<MongoSchemaEntry>> schemas;
 	bool schemas_scanned;
+	// Cache collection names per database (shared across schemas)
+	mutable mutex collection_cache_lock;
+	unordered_map<string, vector<string>> collection_cache; // Key: database_name, Value: collection names
 };
 
 } // namespace duckdb
