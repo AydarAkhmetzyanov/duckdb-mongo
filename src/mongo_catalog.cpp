@@ -204,6 +204,12 @@ private:
 MongoCatalog::MongoCatalog(AttachedDatabase &db, const string &connection_string, const string &database_name)
     : Catalog(db), connection_string(connection_string), database_name(database_name), schemas_scanned(false) {
 	GetMongoInstance();
+	// Set default schema early (similar to Postgres extension which sets "public" in constructor)
+	if (database_name.empty()) {
+		default_schema = "main";
+	} else {
+		default_schema = database_name;
+	}
 }
 
 void MongoCatalog::Initialize(bool load_builtin) {
@@ -268,6 +274,23 @@ void MongoCatalog::ScanSchemas(ClientContext &context, std::function<void(Schema
 	auto system_transaction = CatalogTransaction::GetSystemTransaction(GetDatabase());
 	string first_non_system_schema;
 
+	// When database_name is empty (scanning all databases), create "main" schema first
+	// This follows DuckDB convention, similar to how Postgres defaults to "public"
+	if (database_name.empty()) {
+		CreateSchemaInfo main_schema_info;
+		main_schema_info.schema = "main";
+		main_schema_info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
+		auto main_schema_entry = CreateSchema(system_transaction, main_schema_info);
+		if (main_schema_entry) {
+			auto &main_schema = main_schema_entry->Cast<MongoSchemaEntry>();
+			// "main" schema doesn't correspond to a real MongoDB database, so use empty string
+			auto default_generator =
+			    make_uniq<MongoCollectionGenerator>(*this, main_schema, connection_string, "", this);
+			main_schema.SetDefaultGenerator(std::move(default_generator));
+			callback(main_schema);
+		}
+	}
+
 	for (const auto &schema_name : databases) {
 		if (database_name.empty() && (schema_name == "admin" || schema_name == "local" || schema_name == "config")) {
 			continue;
@@ -304,8 +327,8 @@ void MongoCatalog::ScanSchemas(ClientContext &context, std::function<void(Schema
 	if (default_schema.empty()) {
 		if (!database_name.empty()) {
 			default_schema = database_name;
-		} else if (!first_non_system_schema.empty()) {
-			default_schema = first_non_system_schema;
+		} else {
+			default_schema = "main";
 		}
 	}
 
@@ -320,6 +343,12 @@ optional_ptr<SchemaCatalogEntry> MongoCatalog::LookupSchema(CatalogTransaction t
                                                             const EntryLookupInfo &schema_lookup,
                                                             OnEntryNotFound if_not_found) {
 	auto schema_name = schema_lookup.GetEntryName();
+
+	// Ensure schemas are scanned before lookup
+	if (!schemas_scanned) {
+		auto &context = transaction.GetContext();
+		ScanSchemas(context, [](SchemaCatalogEntry &) {});
+	}
 
 	if (schema_name.empty()) {
 		schema_name = GetDefaultSchema();

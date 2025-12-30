@@ -64,8 +64,6 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
 
 ### mongo_scan Execution Flow
 
-The following diagram shows what happens when `mongo_scan` is called:
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    mongo_scan Execution                         │
@@ -122,30 +120,46 @@ The following diagram shows what happens when `mongo_scan` is called:
    └────────────────────────────────────────────────────────────┘
 ```
 
-### Execution Responsibilities
+### Entity Mapping
 
-**MongoDB Handles:**
-- Document filtering using indexes and query engine
-- Index lookups for fast document retrieval
-- Cursor management and pagination
-- Document storage in native BSON format
+When using `ATTACH` to connect to MongoDB, the extension maps MongoDB entities to DuckDB entities as follows:
 
-**DuckDB Handles:**
-- SQL planning and optimization
-- Analytical operations (joins, aggregations, sorting, window functions)
-- Columnar processing on in-memory data
-- Query optimization for analytical workloads
+```
+MongoDB Entity          →  DuckDB Entity
+─────────────────────────────────────────
+MongoDB Instance        →  Catalog (via ATTACH)
+MongoDB Database        →  Schema
+MongoDB Collection      →  Table/View
+```
 
-This separation leverages MongoDB's document storage strengths and DuckDB's analytical SQL capabilities.
+**Details:**
+- **MongoDB Instance → DuckDB Catalog**: `ATTACH` creates a `MongoCatalog` representing the MongoDB connection
+- **MongoDB Database → DuckDB Schema**: Each MongoDB database becomes a DuckDB schema
+- **MongoDB Collection → DuckDB Table/View**: Collections appear as views (backed by `mongo_scan`)
+
+### Default Schema Behavior
+
+Follows DuckDB conventions (similar to Postgres `"public"`):
+- **Without `dbname`**: Scans all databases, defaults to `"main"` schema
+- **With `dbname`**: Uses database name as default schema
+
+```sql
+ATTACH 'host=localhost port=27017' AS mongo_all (TYPE MONGO);
+USE mongo_all;  -- Defaults to "main"
+
+ATTACH 'host=localhost port=27017 dbname=mydb' AS mongo_db (TYPE MONGO);
+USE mongo_db;  -- Defaults to "mydb"
+```
+
 
 ## Features
 
-- **Direct MongoDB Queries**: Query MongoDB collections directly from DuckDB without exporting data
-- **Automatic Schema Inference**: Automatically infers schema from MongoDB documents (samples first 100 documents by default)
-- **Nested Document Support**: Handles nested documents by flattening them with underscore-separated column names
-- **Type Mapping**: Maps MongoDB BSON types to DuckDB SQL types
-- **Filter Support**: Optional MongoDB query filter to limit results
-- **Read-Only**: Currently supports read-only queries (write support may be added in the future)
+- Direct SQL queries over MongoDB collections (no ETL/export)
+- Automatic schema inference (samples 100 documents by default)
+- Nested document flattening with underscore-separated names
+- BSON type mapping to DuckDB SQL types
+- Optional MongoDB query filters
+- Read-only (write support may be added)
 
 ## Building
 
@@ -204,198 +218,60 @@ The main binaries that will be built are:
 
 ### Loading the Extension
 
-If you built the extension locally, start DuckDB with:
 ```sh
-./build/release/duckdb
+./build/release/duckdb  # Extension auto-loaded
 ```
 
-The extension is automatically loaded. For distributed binaries, load it explicitly:
+Or load explicitly:
 ```sql
 LOAD '/path/to/mongo.duckdb_extension';
 ```
 
 ### Attaching MongoDB Databases
 
-You can attach a MongoDB database using the `ATTACH` command. The extension supports two connection string formats:
-
-#### Key-value format (recommended)
-
-Similar to Postgres libpq format, use space-separated key=value pairs:
-
+**Key-value format (recommended):**
 ```sql
--- Basic connection
 ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
-
--- With authentication
-ATTACH 'host=localhost port=27017 user=myuser password=mypass' AS mongo_db (TYPE MONGO);
-
--- With database name
-ATTACH 'host=localhost port=27017 dbname=mydb' AS mongo_db (TYPE MONGO);
-
--- With authentication source
-ATTACH 'host=localhost port=27017 user=myuser password=mypass authsource=admin' AS mongo_db (TYPE MONGO);
-```
-
-**Supported parameters:**
-- `host` - MongoDB host (default: `localhost`)
-- `port` - MongoDB port (default: `27017`)
-- `dbname` - Database name (optional)
-- `user` - Username for authentication (optional)
-- `password` - Password for authentication (optional)
-- `authsource` - Authentication database (optional, default: `admin`)
-- `srv` - Use SRV DNS resolution for MongoDB Atlas (optional, set to `true` for Atlas connections)
-- `options` - Additional connection options (optional, e.g., `tls=true&tlsAllowInvalidCertificates=true`)
-
-#### MongoDB Atlas
-
-To connect to MongoDB Atlas hosted clusters, use the `srv=true` parameter:
-
-```sql
--- MongoDB Atlas connection
+ATTACH 'host=localhost port=27017 user=myuser password=mypass dbname=mydb' AS mongo_db (TYPE MONGO);
 ATTACH 'host=cluster0.xxxxx.mongodb.net user=myuser password=mypass srv=true' AS atlas_db (TYPE MONGO);
-
--- With specific database
-ATTACH 'host=cluster0.xxxxx.mongodb.net user=myuser password=mypass dbname=mydb srv=true' AS atlas_db (TYPE MONGO);
-
--- With additional options
-ATTACH 'host=cluster0.xxxxx.mongodb.net user=myuser password=mypass srv=true options=authSource=admin' AS atlas_db (TYPE MONGO);
 ```
 
-When `srv=true` is set, the extension automatically:
-- Uses `mongodb+srv://` connection scheme with DNS SRV resolution
-- Omits the port (DNS handles service discovery)
-- Adds `retryWrites=true&w=majority` for Atlas best practices
-
-**Finding your Atlas connection details:**
-1. Go to your MongoDB Atlas cluster
-2. Click "Connect" and then "Drivers"
-3. Copy the hostname (e.g., `cluster0.xxxxx.mongodb.net`)
-4. Use your database user credentials (not your Atlas account)
-
-#### MongoDB URI format
-
-You can also use the standard MongoDB URI format directly:
-
+**MongoDB URI format:**
 ```sql
-ATTACH 'mongodb://localhost:27017' AS mongo_db (TYPE MONGO);
 ATTACH 'mongodb://user:pass@localhost:27017/mydb' AS mongo_db (TYPE MONGO);
-ATTACH 'mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/mydb?retryWrites=true&w=majority' AS atlas_db (TYPE MONGO);
 ```
 
-**Note:** The key=value format is recommended because it avoids issues with DuckDB trying to open `mongodb://` URLs as files.
+**Parameters:** `host`, `port` (default: 27017), `dbname`, `user`, `password`, `authsource` (default: admin), `srv` (for Atlas), `options`
 
-Once attached, you can query MongoDB databases and collections:
-
+**Querying after ATTACH:**
 ```sql
--- List databases (shown as schemas)
-SHOW SCHEMAS;
-
--- List collections in a database (shown as tables/views)
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'mongo_db';
 SHOW TABLES FROM mydb;
-
--- Query a collection
 SELECT * FROM mydb.mycollection;
+SELECT status, COUNT(*) FROM mydb.mycollection WHERE status = 'active' GROUP BY status;
 ```
 
-### Querying MongoDB Collections
-
-You can also use the `mongo_scan` table function directly to query MongoDB collections:
-
+**Using mongo_scan directly:**
 ```sql
--- Basic usage: connection_string, database, collection
 SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection');
-
--- With optional filter (MongoDB query as JSON string)
-SELECT * FROM mongo_scan(
-    'mongodb://localhost:27017',
-    'mydb',
-    'mycollection',
-    filter := '{"status": "active"}'
-);
-
--- With custom sample size for schema inference
-SELECT * FROM mongo_scan(
-    'mongodb://localhost:27017',
-    'mydb',
-    'mycollection',
-    sample_size := 500
-);
-
--- Combine filter and sample size
-SELECT * FROM mongo_scan(
-    'mongodb://localhost:27017',
-    'mydb',
-    'mycollection',
-    filter := '{"status": "active"}',
-    sample_size := 200
-);
+SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection', 
+                         filter := '{"status": "active"}', sample_size := 200);
 ```
 
-### Schema Inference
+## Schema Inference
 
-The extension automatically infers the schema by sampling documents from the collection (default: 100 documents). It:
+Samples documents (default: 100, configurable via `sample_size`):
 
-- Samples the first N documents (configurable via `sample_size` parameter)
-- Collects all unique field paths across sampled documents
-- Flattens nested documents using underscore-separated column names (e.g., `user_name`, `user_address_city`)
-- Handles missing fields by allowing NULL values
-- Maps MongoDB BSON types to DuckDB SQL types
-- Resolves type conflicts using frequency-based heuristics (prefers numeric types when appropriate)
-
-### Example Queries
-
-```sql
--- Count documents
-SELECT COUNT(*) FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection');
-
--- Filter and aggregate
-SELECT status, COUNT(*) as count
-FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection')
-WHERE status = 'active'
-GROUP BY status;
-
--- Join with other DuckDB tables
-SELECT m.*, t.description
-FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection') m
-JOIN transactions t ON m.id = t.mongo_id;
-```
-
-## Schema Inference Details
-
-The extension uses a sophisticated schema inference algorithm inspired by MongoDB's internal schema inference proposal.
-
-### Type Mapping
-
-MongoDB BSON types are mapped to DuckDB SQL types as follows:
-- String → VARCHAR
-- Number (int32/int64) → BIGINT
-- Number (double) → DOUBLE
-- Boolean → BOOLEAN
-- Date → TIMESTAMP
-- ObjectId → VARCHAR
-- Arrays → JSON (normalized to compact format)
-- Nested Documents → JSON (if depth > 5) or flattened
-
-### Type Conflict Resolution
-
-When a field has mixed types across documents, the extension uses frequency-based resolution:
-- If VARCHAR is a strong majority (>70%), prefers VARCHAR (most flexible for truly mixed data)
-- If numeric types (DOUBLE/BIGINT) represent ≥30% of values, prefers the numeric type
-- DOUBLE is preferred over BIGINT when both are present (can represent integers)
-- Boolean and Timestamp require strong majority (≥70%) to be selected
-- Otherwise defaults to VARCHAR for maximum compatibility
-
-### Other Details
-
-- **Key Path Methodology**: Uses dot notation internally, converts to underscore-separated column names
-- **Nested Documents**: Flattens up to 5 levels deep, stores deeper structures as JSON
-- **Array Handling**: Stores arrays as JSON (no positional information retained), normalized to compact format
+- **Type Mapping**: String→VARCHAR, Number→BIGINT/DOUBLE, Boolean→BOOLEAN, Date→TIMESTAMP, ObjectId→VARCHAR, Arrays/Nested→JSON
+- **Nested Documents**: Flattened with underscore-separated names (e.g., `user_address_city`), up to 5 levels deep
+- **Type Conflicts**: Frequency-based resolution (VARCHAR if >70%, numeric if ≥30%, defaults to VARCHAR)
+- **Missing Fields**: NULL values
 
 ## Limitations
 
-- **Read-Only**: Currently supports read-only queries
-- **Schema Sampling**: Schema is inferred from a sample of documents, may miss fields in unsampled documents
-- **Schema Inference**: Schema is inferred on each query execution
+- Read-only
+- Schema inferred from sample (may miss fields)
+- Schema re-inferred per query
 
 ## Contributing
 

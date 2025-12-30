@@ -81,7 +81,6 @@ public:
 		if (!default_schema.empty()) {
 			return default_schema;
 		}
-		// If no default schema set yet, return database_name if specified, or empty
 		return database_name;
 	}
 

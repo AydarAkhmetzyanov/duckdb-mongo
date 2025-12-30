@@ -66,6 +66,37 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 		REQUIRE(schemas.count("smoketests") == 1);
 	}
 
+
+	SECTION("USE command with default schema") {
+		REQUIRE_NO_FAIL(con.Query("ATTACH '" + connection_string + "' AS atlas_db (TYPE MONGO)"));
+
+		// USE command should default to "main" schema
+		REQUIRE_NO_FAIL(con.Query("USE atlas_db"));
+		auto result = con.Query("SELECT current_database(), current_schema()");
+		REQUIRE(!result->HasError());
+		REQUIRE(result->RowCount() == 1);
+		auto chunk = result->Fetch();
+		REQUIRE(chunk->GetValue(0, 0).ToString() == "atlas_db");
+		REQUIRE(chunk->GetValue(1, 0).ToString() == "main");
+
+		// Check information_schema.schemata
+		auto schemas_result = con.Query("SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'atlas_db' ORDER BY schema_name");
+		REQUIRE(!schemas_result->HasError());
+		REQUIRE(schemas_result->RowCount() >= 3); // Should have at least "main", "oa_smoke_test", "smoketests"
+		
+		std::set<std::string> info_schemas;
+		auto schemas_chunk = schemas_result->Fetch();
+		for (idx_t i = 0; i < schemas_chunk->size(); i++) {
+			info_schemas.insert(schemas_chunk->GetValue(0, i).ToString());
+		}
+		
+		// Verify "main" is present (DuckDB convention)
+		REQUIRE(info_schemas.count("main") == 1);
+		// Verify MongoDB databases are present
+		REQUIRE(info_schemas.count("oa_smoke_test") == 1);
+		REQUIRE(info_schemas.count("smoketests") == 1);
+	}
+
 	SECTION("USE command with explicit schema and verify context") {
 		REQUIRE_NO_FAIL(con.Query("ATTACH '" + connection_string + "' AS atlas_db (TYPE MONGO)"));
 
