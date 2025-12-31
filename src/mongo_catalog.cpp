@@ -64,14 +64,16 @@ public:
 				info_copy->schema = schema.name;
 				info_copy->view_name = collection_name;
 				info_copy->sql = cached_info->sql;
-				info_copy->query = cached_info->query ? unique_ptr_cast<SQLStatement, SelectStatement>(cached_info->query->Copy()) : nullptr;
+				info_copy->query = cached_info->query
+				                       ? unique_ptr_cast<SQLStatement, SelectStatement>(cached_info->query->Copy())
+				                       : nullptr;
 				info_copy->types = cached_info->types;
 				info_copy->names = cached_info->names;
 				info_copy->aliases = cached_info->aliases;
 				info_copy->temporary = cached_info->temporary;
 				info_copy->internal = cached_info->internal;
 				info_copy->dependencies = cached_info->dependencies;
-				
+
 				auto entry = make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *info_copy);
 				return entry;
 			}
@@ -104,11 +106,11 @@ public:
 		                                 cached_escaped_database_name, escaped_collection_name);
 
 		auto view_info = CreateViewInfo::FromSelect(context, std::move(result));
-		
+
 		if (mongo_catalog) {
 			mongo_catalog->CacheViewInfo(database_name, collection_name, *view_info);
 		}
-		
+
 		auto entry = make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *view_info);
 		return entry;
 	}

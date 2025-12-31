@@ -1,6 +1,7 @@
 # name: test/sql/cache/clear_cache.test
 # description: Test mongo_clear_cache table function - verifies cache invalidation
 # group: [cache]
+
 # 
 # This test verifies that mongo_clear_cache() clears all caches:
 # - Collection names cache (collection_cache)

@@ -14,7 +14,6 @@ struct ClearCacheFunctionData : public TableFunctionData {
 
 static unique_ptr<FunctionData> ClearCacheBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
-
 	auto result = make_uniq<ClearCacheFunctionData>();
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.emplace_back("Success");
@@ -39,7 +38,7 @@ static void ClearCacheFunction(ClientContext &context, TableFunctionInput &data_
 		return;
 	}
 	MongoClearCacheFunction::ClearMongoCaches(context);
-	
+
 	// Return success
 	output.SetCardinality(1);
 	output.data[0].Reference(Value::BOOLEAN(true));
@@ -51,4 +50,3 @@ MongoClearCacheFunction::MongoClearCacheFunction()
 }
 
 } // namespace duckdb
-

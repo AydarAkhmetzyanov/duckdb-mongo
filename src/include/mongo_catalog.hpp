@@ -114,10 +114,11 @@ private:
 	// Cache collection names per database (shared across schemas)
 	mutable mutex collection_cache_lock;
 	unordered_map<string, vector<string>> collection_cache; // Key: database_name, Value: collection names
-	
+
 	// Cache parsed CreateViewInfo per collection to avoid re-parsing SQL
 	mutable mutex view_info_cache_lock;
-	unordered_map<string, shared_ptr<CreateViewInfo>> view_info_cache; // Key: "db_name:collection_name", Value: cached CreateViewInfo
+	unordered_map<string, shared_ptr<CreateViewInfo>>
+	    view_info_cache; // Key: "db_name:collection_name", Value: cached CreateViewInfo
 };
 
 } // namespace duckdb

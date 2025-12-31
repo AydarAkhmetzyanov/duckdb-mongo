@@ -205,10 +205,10 @@ void MongoSchemaEntry::Scan(ClientContext &context, CatalogType type,
 
 		vector<string> collections_to_remove;
 		vector<string> collections_to_create;
-		
+
 		{
 			lock_guard<mutex> lock(entry_lock);
-			
+
 			// Find entries that no longer exist in MongoDB
 			for (const auto &[name, entry] : views) {
 				bool found = false;
@@ -222,19 +222,19 @@ void MongoSchemaEntry::Scan(ClientContext &context, CatalogType type,
 					collections_to_remove.push_back(name);
 				}
 			}
-			
+
 			// Remove stale entries
 			for (const auto &name : collections_to_remove) {
 				views.erase(name);
 			}
-			
+
 			// Find new collections that need entries
 			for (const auto &collection_name : loaded_collection_names) {
 				if (views.find(collection_name) == views.end()) {
 					collections_to_create.push_back(collection_name);
 				}
 			}
-			
+
 			// Callback existing entries
 			for (auto &[name, entry] : views) {
 				callback(*entry);
