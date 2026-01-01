@@ -16,6 +16,7 @@ fi
 MONGO_HOST=${MONGO_HOST:-localhost}
 MONGO_PORT=${MONGO_PORT:-27017}
 MONGO_DB=${MONGO_DB:-tpch}
+# Scale factor: 0.01 = ~10MB (quick test), 0.1 = ~100MB (dev), 1 = ~1GB (benchmark), 10 = ~10GB (production)
 SCALE_FACTOR=${SCALE_FACTOR:-0.01}
 
 echo "=== Generating TPC-H data (scale factor: $SCALE_FACTOR) ==="
@@ -86,10 +87,94 @@ for table in "${TPCH_TABLES[@]}"; do
     fi
     
     # Load CSV into MongoDB using mongosh
-    mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
-    const fs = require('fs');
-    const csv = fs.readFileSync('$CSV_FILE', 'utf-8');
-    const lines = csv.trim().split('\\n');
+    # For large files (like lineitem), process in chunks to avoid memory issues
+    if [ "${table}" = "lineitem" ] && [ -f "$CSV_FILE" ]; then
+        # Use Python for lineitem to handle large files better
+        python3 << PYTHON_SCRIPT
+import csv
+import sys
+from pymongo import MongoClient
+from datetime import datetime
+import re
+
+client = MongoClient('mongodb://$MONGO_HOST:$MONGO_PORT/')
+db = client['$MONGO_DB']
+collection = db['${table}']
+
+date_suffixes = ['date', 'Date', 'DATE']
+def is_date_column(header):
+    return any(header.lower().endswith(suffix.lower()) for suffix in date_suffixes)
+
+def is_date_string(s):
+    if not s or not isinstance(s, str):
+        return False
+    pattern = r'^\d{4}-\d{2}-\d{2}$'
+    if not re.match(pattern, s):
+        return False
+    try:
+        date = datetime.strptime(s, '%Y-%m-%d')
+        return True
+    except:
+        return False
+
+batch = []
+batch_size = 50000
+total = 0
+
+with open('$CSV_FILE', 'r', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='|')
+    headers = [h.strip() for h in next(reader)]
+    
+    for row in reader:
+        if not row or len(row) == 0:
+            continue
+        doc = {}
+        for idx, header in enumerate(headers):
+            value = row[idx] if idx < len(row) else None
+            if value is None or value == '':
+                doc[header] = None
+            else:
+                trimmed = value.strip()
+                # Strip quotes
+                if len(trimmed) >= 2:
+                    if trimmed.startswith('"') and trimmed.endswith('"'):
+                        trimmed = trimmed[1:-1].replace('""', '"')
+                    elif trimmed.startswith("'") and trimmed.endswith("'"):
+                        trimmed = trimmed[1:-1]
+                
+                if trimmed == 'NULL' or trimmed == '':
+                    doc[header] = None
+                elif is_date_column(header) and is_date_string(trimmed):
+                    doc[header] = datetime.strptime(trimmed, '%Y-%m-%d')
+                else:
+                    try:
+                        if '.' in trimmed:
+                            doc[header] = float(trimmed)
+                        else:
+                            doc[header] = int(trimmed)
+                    except ValueError:
+                        doc[header] = trimmed
+        
+        batch.append(doc)
+        if len(batch) >= batch_size:
+            collection.insert_many(batch)
+            total += len(batch)
+            print(f"Inserted batch: {len(batch)} documents (total: {total})", flush=True)
+            batch = []
+    
+    if batch:
+        collection.insert_many(batch)
+        total += len(batch)
+        print(f"Inserted final batch: {len(batch)} documents (total: {total})", flush=True)
+
+print(f"Inserted {total} documents into ${table}", flush=True)
+PYTHON_SCRIPT
+    else
+        # For smaller tables, use mongosh
+        mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+        const fs = require('fs');
+        const csv = fs.readFileSync('$CSV_FILE', 'utf-8');
+        const lines = csv.trim().split('\\n');
     
     if (lines.length < 2) {
         print(\"Warning: CSV file for ${table} is empty or has no data rows\");
@@ -115,57 +200,66 @@ for table in "${TPCH_TABLES[@]}"; do
         return !isNaN(date.getTime()) && date.toISOString().startsWith(str);
     };
     
-    // Convert each row to a MongoDB document
-    const documents = [];
-    for (let i = 1; i < lines.length; i++) {
-        if (!lines[i].trim()) continue;
-        const values = lines[i].split('|');
-        const doc = {};
-        headers.forEach((header, idx) => {
-            const value = values[idx];
-            if (value === undefined || value === null) {
-                doc[header] = null;
-            } else {
-                // Preserve whitespace to match TPC-H expected results
-                // Strip surrounding quotes if present (DuckDB exports strings with special characters quoted)
-                let trimmed = value;
-                if (trimmed.length >= 2) {
-                    if (trimmed.startsWith(\"\\\"\") && trimmed.endsWith(\"\\\"\")) {
-                        trimmed = trimmed.slice(1, -1);
-                        // Handle escaped quotes (double quotes inside)
-                        trimmed = trimmed.replace(/\"\"/g, \"\\\"\");
-                    } else if (trimmed.startsWith(\"'\") && trimmed.endsWith(\"'\")) {
-                        trimmed = trimmed.slice(1, -1);
-                    }
-                }
-                
-                if (trimmed === \"NULL\" || trimmed === \"\") {
+    // Process in batches to avoid memory issues with large datasets
+    const BATCH_SIZE = 50000;
+    let totalInserted = 0;
+    
+    for (let batchStart = 1; batchStart < lines.length; batchStart += BATCH_SIZE) {
+        const documents = [];
+        const batchEnd = Math.min(batchStart + BATCH_SIZE, lines.length);
+        
+        for (let i = batchStart; i < batchEnd; i++) {
+            if (!lines[i].trim()) continue;
+            const values = lines[i].split('|');
+            const doc = {};
+            headers.forEach((header, idx) => {
+                const value = values[idx];
+                if (value === undefined || value === null) {
                     doc[header] = null;
-                } else if (isDateColumn(header) && isDateString(trimmed)) {
-                    // Store dates as MongoDB Date objects for proper date comparisons
-                    doc[header] = new Date(trimmed);
-                } else if (trimmed !== \"\" && !isNaN(trimmed) && trimmed !== \"NULL\") {
-                    // Try to convert to number if it looks like a number
-                    if (trimmed.includes(\".\")) {
-                        doc[header] = parseFloat(trimmed);
-                    } else {
-                        doc[header] = parseInt(trimmed, 10);
-                    }
                 } else {
-                    doc[header] = trimmed;
+                    // Preserve whitespace to match TPC-H expected results
+                    // Strip surrounding quotes if present (DuckDB exports strings with special characters quoted)
+                    let trimmed = value;
+                    if (trimmed.length >= 2) {
+                        if (trimmed.startsWith(\"\\\"\") && trimmed.endsWith(\"\\\"\")) {
+                            trimmed = trimmed.slice(1, -1);
+                            // Handle escaped quotes (double quotes inside)
+                            trimmed = trimmed.replace(/\"\"/g, \"\\\"\");
+                        } else if (trimmed.startsWith(\"'\") && trimmed.endsWith(\"'\")) {
+                            trimmed = trimmed.slice(1, -1);
+                        }
+                    }
+                    
+                    if (trimmed === \"NULL\" || trimmed === \"\") {
+                        doc[header] = null;
+                    } else if (isDateColumn(header) && isDateString(trimmed)) {
+                        // Store dates as MongoDB Date objects for proper date comparisons
+                        doc[header] = new Date(trimmed);
+                    } else if (trimmed !== \"\" && !isNaN(trimmed) && trimmed !== \"NULL\") {
+                        // Try to convert to number if it looks like a number
+                        if (trimmed.includes(\".\")) {
+                            doc[header] = parseFloat(trimmed);
+                        } else {
+                            doc[header] = parseInt(trimmed, 10);
+                        }
+                    } else {
+                        doc[header] = trimmed;
+                    }
                 }
-            }
-        });
-        documents.push(doc);
+            });
+            documents.push(doc);
+        }
+        
+        if (documents.length > 0) {
+            db.${table}.insertMany(documents);
+            totalInserted += documents.length;
+            print(\"Inserted batch: \" + documents.length + \" documents (total: \" + totalInserted + \")\");
+        }
     }
     
-    if (documents.length > 0) {
-        db.${table}.insertMany(documents);
-        print(\"Inserted \" + documents.length + \" documents into ${table}\");
-    } else {
-        print(\"Warning: No documents to insert for ${table}\");
-    }
+    print(\"Inserted \" + totalInserted + \" documents into ${table}\");
     "
+    fi
 done
 
 echo ""
