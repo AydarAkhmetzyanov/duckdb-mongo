@@ -564,7 +564,8 @@ void AppendValueToArray(bsoncxx::builder::basic::array &array_builder, const Val
 }
 
 // Helper function to append a DuckDB Value to a MongoDB basic document builder
-void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const string &key, const Value &value, const LogicalType &type) {
+void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const string &key, const Value &value,
+                           const LogicalType &type) {
 	if (value.IsNull()) {
 		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_null {}));
 		return;
@@ -600,13 +601,15 @@ void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const
 		auto time_obj = Time::FromTime(0, 0, 0);
 		auto timestamp_val = Timestamp::FromDatetime(date_obj, time_obj);
 		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
-		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
+		doc_builder.append(
+		    bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
 		break;
 	}
 	case LogicalTypeId::TIMESTAMP: {
 		auto timestamp_val = value.GetValue<timestamp_t>();
 		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
-		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
+		doc_builder.append(
+		    bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
 		break;
 	}
 	default: {
@@ -619,7 +622,7 @@ void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const
 
 // Convert a single filter to MongoDB query document
 bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, const string &column_name,
-                                                               const LogicalType &column_type) {
+                                                    const LogicalType &column_type) {
 	bsoncxx::builder::basic::document doc;
 
 	switch (filter.filter_type) {
@@ -690,8 +693,8 @@ bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, c
 			for (auto it = child_doc.view().begin(); it != child_doc.view().end(); ++it) {
 				if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
 					// Merge nested document conditions
-					for (auto nested_it = it->get_document().value.begin();
-					     nested_it != it->get_document().value.end(); ++nested_it) {
+					for (auto nested_it = it->get_document().value.begin(); nested_it != it->get_document().value.end();
+					     ++nested_it) {
 						merged_doc.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
 					}
 				}
@@ -705,7 +708,7 @@ bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, c
 		// Check if all child filters are equality comparisons - if so, use $in
 		bool all_equality = true;
 		vector<Value> equality_values;
-		
+
 		for (const auto &child_filter : conj_filter.child_filters) {
 			if (child_filter->filter_type == TableFilterType::CONSTANT_COMPARISON) {
 				const auto &cf = child_filter->Cast<ConstantFilter>();
@@ -720,7 +723,7 @@ bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, c
 				break;
 			}
 		}
-		
+
 		if (all_equality && equality_values.size() > 1) {
 			// Use $in for multiple equality checks
 			bsoncxx::builder::basic::array in_array;
@@ -761,7 +764,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 
 	// Group filters by column name to merge multiple filters on same column
 	map<string, bsoncxx::builder::basic::document> column_filters;
-	
+
 	for (const auto &filter_pair : filters->filters) {
 		idx_t col_idx = filter_pair.first;
 		if (col_idx >= column_names.size()) {
@@ -787,7 +790,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 				break;
 			}
 		}
-		
+
 		if (!has_column_filter) {
 			// Top-level operator like $or - add directly
 			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
@@ -863,7 +866,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 
 	// Build MongoDB find options
 	mongocxx::options::find opts;
-	
+
 	// LIMIT pushdown: Push constant LIMIT values to MongoDB
 	// Only works when LIMIT is directly above table scan (simple queries, not Q3/Q10 with joins)
 	if (input.op) {
@@ -887,7 +890,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 			}
 		}
 	}
-	
+
 	// Create cursor
 	result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter, opts));
 	result->current = make_uniq<mongocxx::cursor::iterator>(result->cursor->begin());
