@@ -60,17 +60,24 @@ cd benchmarks
 
 # Run a specific query with verbose output
 ./benchmark-tpch.sh 1 5 --verbose
+
+# Run a query once and show results (for debugging/verification)
+./benchmark-tpch.sh 6 1 --show-results
+
+# Show results AND run benchmark comparison
+./benchmark-tpch.sh 6 3 --verbose --show-results
 ```
 
 ### Command Syntax
 
 ```bash
-./benchmark-tpch.sh [query_number|all] [iterations] [--verbose|-v]
+./benchmark-tpch.sh [query_number|all] [iterations] [--verbose|-v] [--show-results|-s]
 
 Arguments:
-  query_number  - Query number (1-22) or 'all' for all queries
-  iterations    - Number of times to run each query (default: 3)
-  --verbose|-v  - Enable detailed output mode
+  query_number     - Query number (1-22) or 'all' for all queries
+  iterations       - Number of times to run each query (default: 3)
+  --verbose|-v     - Enable detailed output mode with DuckDB vs MongoDB comparison
+  --show-results|-s - Display actual query results (can be combined with --verbose)
 ```
 
 ## Setting Up TPC-H Data

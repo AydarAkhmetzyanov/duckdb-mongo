@@ -25,6 +25,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	mongo_scan.named_parameters["filter"] = LogicalType::VARCHAR;
 	mongo_scan.named_parameters["sample_size"] = LogicalType::BIGINT;
 
+	// Enable filter pushdown
+	mongo_scan.filter_pushdown = true;
+
 	// Register the table function
 	loader.RegisterFunction(mongo_scan);
 

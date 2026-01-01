@@ -2,6 +2,14 @@
 #include "mongo_instance.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/in_filter.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/common/enums/expression_type.hpp"
+#include <bsoncxx/builder/basic/document.hpp>
+#include <bsoncxx/builder/basic/array.hpp>
 #include <sstream>
 
 namespace duckdb {
@@ -498,6 +506,333 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 	return std::move(result);
 }
 
+// Helper function to append a DuckDB Value to a MongoDB basic array builder
+void AppendValueToArray(bsoncxx::builder::basic::array &array_builder, const Value &value, const LogicalType &type) {
+	if (value.IsNull()) {
+		array_builder.append(bsoncxx::types::b_null {});
+		return;
+	}
+
+	switch (type.id()) {
+	case LogicalTypeId::VARCHAR: {
+		array_builder.append(value.GetValue<string>());
+		break;
+	}
+	case LogicalTypeId::BIGINT: {
+		array_builder.append(value.GetValue<int64_t>());
+		break;
+	}
+	case LogicalTypeId::INTEGER: {
+		array_builder.append(value.GetValue<int32_t>());
+		break;
+	}
+	case LogicalTypeId::DOUBLE: {
+		array_builder.append(value.GetValue<double>());
+		break;
+	}
+	case LogicalTypeId::BOOLEAN: {
+		array_builder.append(value.GetValue<bool>());
+		break;
+	}
+	case LogicalTypeId::DATE: {
+		auto date_val = value.GetValue<date_t>();
+		auto year = Date::ExtractYear(date_val);
+		auto month = Date::ExtractMonth(date_val);
+		auto day = Date::ExtractDay(date_val);
+		auto date_obj = Date::FromDate(year, month, day);
+		auto time_obj = Time::FromTime(0, 0, 0);
+		auto timestamp_val = Timestamp::FromDatetime(date_obj, time_obj);
+		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
+		array_builder.append(bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)});
+		break;
+	}
+	case LogicalTypeId::TIMESTAMP: {
+		auto timestamp_val = value.GetValue<timestamp_t>();
+		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
+		array_builder.append(bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)});
+		break;
+	}
+	default: {
+		// For unknown types, convert to string
+		array_builder.append(value.ToString());
+		break;
+	}
+	}
+}
+
+// Helper function to append a DuckDB Value to a MongoDB basic document builder
+void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const string &key, const Value &value, const LogicalType &type) {
+	if (value.IsNull()) {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_null {}));
+		return;
+	}
+
+	switch (type.id()) {
+	case LogicalTypeId::VARCHAR: {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.GetValue<string>()));
+		break;
+	}
+	case LogicalTypeId::BIGINT: {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.GetValue<int64_t>()));
+		break;
+	}
+	case LogicalTypeId::INTEGER: {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.GetValue<int32_t>()));
+		break;
+	}
+	case LogicalTypeId::DOUBLE: {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.GetValue<double>()));
+		break;
+	}
+	case LogicalTypeId::BOOLEAN: {
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.GetValue<bool>()));
+		break;
+	}
+	case LogicalTypeId::DATE: {
+		auto date_val = value.GetValue<date_t>();
+		auto year = Date::ExtractYear(date_val);
+		auto month = Date::ExtractMonth(date_val);
+		auto day = Date::ExtractDay(date_val);
+		auto date_obj = Date::FromDate(year, month, day);
+		auto time_obj = Time::FromTime(0, 0, 0);
+		auto timestamp_val = Timestamp::FromDatetime(date_obj, time_obj);
+		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
+		break;
+	}
+	case LogicalTypeId::TIMESTAMP: {
+		auto timestamp_val = value.GetValue<timestamp_t>();
+		auto ms_since_epoch = Timestamp::GetEpochMs(timestamp_val);
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_date {std::chrono::milliseconds(ms_since_epoch)}));
+		break;
+	}
+	default: {
+		// For unknown types, convert to string
+		doc_builder.append(bsoncxx::builder::basic::kvp(key, value.ToString()));
+		break;
+	}
+	}
+}
+
+// Convert a single filter to MongoDB query document
+bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, const string &column_name,
+                                                               const LogicalType &column_type) {
+	bsoncxx::builder::basic::document doc;
+
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		const auto &constant_filter = filter.Cast<ConstantFilter>();
+		string mongo_op;
+
+		switch (constant_filter.comparison_type) {
+		case ExpressionType::COMPARE_EQUAL:
+			// For equality, we can use direct field matching
+			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type);
+			break;
+		case ExpressionType::COMPARE_NOTEQUAL:
+			mongo_op = "$ne";
+			break;
+		case ExpressionType::COMPARE_LESSTHAN:
+			mongo_op = "$lt";
+			break;
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			mongo_op = "$lte";
+			break;
+		case ExpressionType::COMPARE_GREATERTHAN:
+			mongo_op = "$gt";
+			break;
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			mongo_op = "$gte";
+			break;
+		default:
+			// Unsupported comparison type, return empty filter
+			return doc.extract();
+		}
+
+		if (!mongo_op.empty()) {
+			bsoncxx::builder::basic::document op_doc;
+			AppendValueToDocument(op_doc, mongo_op, constant_filter.constant, column_type);
+			doc.append(bsoncxx::builder::basic::kvp(column_name, op_doc.extract()));
+		}
+		break;
+	}
+	case TableFilterType::IN_FILTER: {
+		const auto &in_filter = filter.Cast<InFilter>();
+		bsoncxx::builder::basic::array in_array;
+		for (const auto &val : in_filter.values) {
+			AppendValueToArray(in_array, val, column_type);
+		}
+		bsoncxx::builder::basic::document in_doc;
+		in_doc.append(bsoncxx::builder::basic::kvp("$in", in_array.extract()));
+		doc.append(bsoncxx::builder::basic::kvp(column_name, in_doc.extract()));
+		break;
+	}
+	case TableFilterType::IS_NULL: {
+		doc.append(bsoncxx::builder::basic::kvp(column_name, bsoncxx::types::b_null {}));
+		break;
+	}
+	case TableFilterType::IS_NOT_NULL: {
+		bsoncxx::builder::basic::document ne_doc;
+		ne_doc.append(bsoncxx::builder::basic::kvp("$ne", bsoncxx::types::b_null {}));
+		doc.append(bsoncxx::builder::basic::kvp(column_name, ne_doc.extract()));
+		break;
+	}
+	case TableFilterType::CONJUNCTION_AND: {
+		// For AND filters, combine conditions on the same column
+		const auto &conj_filter = static_cast<const ConjunctionFilter &>(filter);
+		bsoncxx::builder::basic::document merged_doc;
+		for (const auto &child_filter : conj_filter.child_filters) {
+			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type);
+			// Extract conditions from child_doc and merge
+			for (auto it = child_doc.view().begin(); it != child_doc.view().end(); ++it) {
+				if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
+					// Merge nested document conditions
+					for (auto nested_it = it->get_document().value.begin();
+					     nested_it != it->get_document().value.end(); ++nested_it) {
+						merged_doc.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
+					}
+				}
+			}
+		}
+		doc.append(bsoncxx::builder::basic::kvp(column_name, merged_doc.extract()));
+		break;
+	}
+	case TableFilterType::CONJUNCTION_OR: {
+		const auto &conj_filter = static_cast<const ConjunctionFilter &>(filter);
+		// Check if all child filters are equality comparisons - if so, use $in
+		bool all_equality = true;
+		vector<Value> equality_values;
+		
+		for (const auto &child_filter : conj_filter.child_filters) {
+			if (child_filter->filter_type == TableFilterType::CONSTANT_COMPARISON) {
+				const auto &cf = child_filter->Cast<ConstantFilter>();
+				if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
+					equality_values.push_back(cf.constant);
+				} else {
+					all_equality = false;
+					break;
+				}
+			} else {
+				all_equality = false;
+				break;
+			}
+		}
+		
+		if (all_equality && equality_values.size() > 1) {
+			// Use $in for multiple equality checks
+			bsoncxx::builder::basic::array in_array;
+			for (const auto &val : equality_values) {
+				AppendValueToArray(in_array, val, column_type);
+			}
+			bsoncxx::builder::basic::document in_doc;
+			in_doc.append(bsoncxx::builder::basic::kvp("$in", in_array.extract()));
+			doc.append(bsoncxx::builder::basic::kvp(column_name, in_doc.extract()));
+		} else {
+			// For complex OR filters, use $or at top level
+			bsoncxx::builder::basic::array or_array;
+			for (const auto &child_filter : conj_filter.child_filters) {
+				auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type);
+				or_array.append(child_doc.view());
+			}
+			doc.append(bsoncxx::builder::basic::kvp("$or", or_array.extract()));
+		}
+		break;
+	}
+	default:
+		// Unsupported filter type, return empty filter
+		break;
+	}
+
+	return doc.extract();
+}
+
+// Convert DuckDB filters to MongoDB query
+bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters,
+                                                    const vector<string> &column_names,
+                                                    const vector<LogicalType> &column_types) {
+	bsoncxx::builder::basic::document query_builder;
+
+	if (!filters || filters->filters.empty()) {
+		return query_builder.extract();
+	}
+
+	// Group filters by column name to merge multiple filters on the same column
+	map<string, bsoncxx::builder::basic::document> column_filters;
+	
+	for (const auto &filter_pair : filters->filters) {
+		idx_t col_idx = filter_pair.first;
+		if (col_idx >= column_names.size()) {
+			continue;
+		}
+
+		const auto &filter = filter_pair.second;
+		const string &column_name = column_names[col_idx];
+		const LogicalType &column_type = col_idx < column_types.size() ? column_types[col_idx] : LogicalType::VARCHAR;
+
+		auto filter_doc = ConvertSingleFilterToMongo(*filter, column_name, column_type);
+		if (filter_doc.view().empty()) {
+			continue;
+		}
+
+		// Extract the filter for this column from the filter document
+		bsoncxx::types::bson_value::view column_filter_value;
+		bool has_column_filter = false;
+		for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
+			if (doc_it->key() == column_name) {
+				column_filter_value = doc_it->get_value();
+				has_column_filter = true;
+				break;
+			}
+		}
+		
+		if (!has_column_filter) {
+			// Top-level operator like $or - add directly to query
+			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
+				query_builder.append(bsoncxx::builder::basic::kvp(doc_it->key(), doc_it->get_value()));
+			}
+			continue;
+		}
+
+		// Check if we already have filters for this column
+		auto it = column_filters.find(column_name);
+		if (it == column_filters.end()) {
+			// First filter for this column
+			bsoncxx::builder::basic::document col_doc;
+			if (column_filter_value.type() == bsoncxx::type::k_document) {
+				// Has operators like {$gte: X, $lt: Y} - copy all operators
+				for (auto nested_it = column_filter_value.get_document().value.begin();
+				     nested_it != column_filter_value.get_document().value.end(); ++nested_it) {
+					col_doc.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
+				}
+			} else {
+				// Simple value match (equality) - store as direct value for now
+				// We'll convert to $eq only if we need to merge with operators later
+				col_doc.append(bsoncxx::builder::basic::kvp("$eq", column_filter_value));
+			}
+			column_filters[column_name] = std::move(col_doc);
+		} else {
+			// Merge additional filters for this column
+			if (column_filter_value.type() == bsoncxx::type::k_document) {
+				// Merge operators into existing column filter
+				for (auto nested_it = column_filter_value.get_document().value.begin();
+				     nested_it != column_filter_value.get_document().value.end(); ++nested_it) {
+					it->second.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
+				}
+			} else {
+				// Simple value - add as $eq (we already have a document structure)
+				it->second.append(bsoncxx::builder::basic::kvp("$eq", column_filter_value));
+			}
+		}
+	}
+
+	// Add all column filters to query
+	for (auto &col_filter_pair : column_filters) {
+		query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, col_filter_pair.second.extract()));
+	}
+
+	return query_builder.extract();
+}
+
 unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
                                                        GlobalTableFunctionState *global_state) {
 	const auto &data = dynamic_cast<const MongoScanData &>(*input.bind_data);
@@ -513,16 +848,29 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	auto db = result->connection->client[result->database_name];
 	auto collection = db[result->collection_name];
 
-	// Build query
+	// Build query from pushed-down filters
 	bsoncxx::document::view_or_value query_filter;
-	if (!result->filter_query.empty()) {
+	if (input.filters) {
+		// Convert DuckDB filters to MongoDB query
+		auto mongo_filter = ConvertFiltersToMongoQuery(input.filters, data.column_names, data.column_types);
+		query_filter = std::move(mongo_filter);
+	} else if (!result->filter_query.empty()) {
+		// Fall back to manual filter query if provided
 		query_filter = bsoncxx::from_json(result->filter_query);
 	} else {
 		query_filter = bsoncxx::builder::stream::document {} << bsoncxx::builder::stream::finalize;
 	}
 
+	// Build MongoDB find options
+	mongocxx::options::find opts;
+	
+	// TODO: LIMIT pushdown
+	// LIMIT pushdown would require checking the query plan for a PhysicalLimit operator
+	// and extracting the limit value. This would require traversing the operator tree
+	// from input.op. For now, LIMIT is handled by DuckDB after the scan.
+	
 	// Create cursor
-	result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter));
+	result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter, opts));
 	result->current = make_uniq<mongocxx::cursor::iterator>(result->cursor->begin());
 	result->end = make_uniq<mongocxx::cursor::iterator>(result->cursor->end());
 

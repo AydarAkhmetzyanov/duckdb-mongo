@@ -1,9 +1,11 @@
 #!/bin/bash
 # Benchmark script for TPC-H queries with DuckDB+MongoDB extension
 # Usage: 
-#   ./benchmarks/benchmark-tpch.sh [query_number|all] [iterations] [--verbose]
+#   ./benchmarks/benchmark-tpch.sh [query_number|all] [iterations] [--verbose] [--show-results]
 #   ./benchmarks/benchmark-tpch.sh all 3              # Summary mode (default)
 #   ./benchmarks/benchmark-tpch.sh all 3 --verbose    # Detailed comparison mode
+#   ./benchmarks/benchmark-tpch.sh 6 1 --show-results # Run query once and show results
+#   ./benchmarks/benchmark-tpch.sh 6 3 --verbose --show-results # Show results then benchmark comparison
 
 set -e
 
@@ -19,11 +21,15 @@ MONGO_PORT="${MONGO_PORT:-27017}"
 QUERY_NUM="all"
 ITERATIONS=3
 VERBOSE=false
+SHOW_RESULTS=false
 
 for arg in "$@"; do
     case $arg in
         --verbose|-v)
             VERBOSE=true
+            ;;
+        --show-results|-s)
+            SHOW_RESULTS=true
             ;;
         [0-9]*)
             if [ "$QUERY_NUM" = "all" ] && [ "$arg" -ge 1 ] && [ "$arg" -le 22 ]; then
@@ -62,6 +68,7 @@ run_duckdb_query() {
     echo "PRAGMA tpch($query_num);" > "$temp_file"
     
     local start_time=$(date +%s.%N)
+    # Always suppress output for benchmarking (--show-results is handled separately)
     "$DUCKDB_PATH" -c "
         ATTACH 'host=$MONGO_HOST port=$MONGO_PORT database=$MONGO_DB' AS tpch_mongo (TYPE MONGO);
         SET search_path='tpch_mongo.tpch';
@@ -242,11 +249,62 @@ print_summary() {
     done
 }
 
+# Function to estimate scale factor from MongoDB data
+estimate_scale_factor() {
+    local lineitem_count=$(mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --quiet --eval "db.lineitem.countDocuments()" 2>/dev/null || echo "0")
+    if [ "$lineitem_count" -gt 5000000 ]; then
+        echo "1"
+    elif [ "$lineitem_count" -gt 500000 ]; then
+        echo "0.1"
+    elif [ "$lineitem_count" -gt 50000 ]; then
+        echo "0.01"
+    else
+        echo "unknown"
+    fi
+}
+
 # Main execution
+SF_ESTIMATE=$(estimate_scale_factor)
+
+# If --show-results is set, show query results first
+if [ "$SHOW_RESULTS" = true ]; then
+    if [ "$QUERY_NUM" = "all" ]; then
+        echo "Error: --show-results can only be used with a specific query number (1-22)"
+        exit 1
+    fi
+    
+    echo "Running TPC-H Query $QUERY_NUM..."
+    echo "MongoDB: mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB"
+    echo "Scale Factor: SF-$SF_ESTIMATE (estimated from data size)"
+    echo ""
+    
+    start_time=$(date +%s.%N)
+    "$DUCKDB_PATH" -c "
+        ATTACH 'host=$MONGO_HOST port=$MONGO_PORT database=$MONGO_DB' AS tpch_mongo (TYPE MONGO);
+        SET search_path='tpch_mongo.tpch';
+        PRAGMA tpch($QUERY_NUM);
+    "
+    end_time=$(date +%s.%N)
+    
+    duration=$(echo "($end_time - $start_time) * 1000" | bc)
+    echo ""
+    echo "Query completed in: $(printf "%.2f" "$duration") ms"
+    
+    # If --verbose is also set, continue with benchmark comparison
+    if [ "$VERBOSE" = false ]; then
+        exit 0
+    else
+        echo ""
+        echo "=== Benchmark Comparison ==="
+        echo ""
+    fi
+fi
+
 if [ "$VERBOSE" = true ]; then
     echo "=== TPC-H Benchmark Comparison ==="
     echo "Database: $MONGO_DB"
     echo "Host: $MONGO_HOST:$MONGO_PORT"
+    echo "Scale Factor: SF-$SF_ESTIMATE (estimated from data size)"
     echo "Iterations: $ITERATIONS"
     echo ""
     
@@ -265,7 +323,7 @@ if [ "$VERBOSE" = true ]; then
     fi
 else
     echo "=== TPC-H Performance Summary (DuckDB+MongoDB Extension) ==="
-    echo "Database: $MONGO_DB | Host: $MONGO_HOST:$MONGO_PORT | Iterations: $ITERATIONS"
+    echo "Database: $MONGO_DB | Host: $MONGO_HOST:$MONGO_PORT | Scale Factor: SF-$SF_ESTIMATE | Iterations: $ITERATIONS"
     echo ""
     
     if [ "$QUERY_NUM" = "all" ]; then

@@ -41,12 +41,13 @@ struct MongoScanState : public LocalTableFunctionState {
 	std::string database_name;
 	std::string collection_name;
 	std::string filter_query;
+	int64_t limit = -1;
 	unique_ptr<mongocxx::cursor> cursor;
 	unique_ptr<mongocxx::cursor::iterator> current;
 	unique_ptr<mongocxx::cursor::iterator> end;
 	bool finished = false;
 
-	MongoScanState() : finished(false) {
+	MongoScanState() : finished(false), limit(-1) {
 	}
 };
 
@@ -63,6 +64,11 @@ LogicalType ResolveTypeConflict(const std::vector<LogicalType> &types);
 
 void FlattenDocument(const bsoncxx::document::view &doc, const std::vector<std::string> &column_names,
                      const std::vector<LogicalType> &column_types, DataChunk &output, idx_t row_idx);
+
+// Filter pushdown functions
+bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters,
+                                                    const vector<string> &column_names,
+                                                    const vector<LogicalType> &column_types);
 
 class MongoClearCacheFunction : public TableFunction {
 public:
