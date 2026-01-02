@@ -284,7 +284,7 @@ void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_s
 	// If collection is empty, we still need at least one column
 	if (field_types.find("_id") == field_types.end()) {
 		field_types["_id"] = {LogicalType::VARCHAR}; // ObjectId as string
-		column_name_to_mongo_path["_id"] = "_id"; // Map _id to itself
+		column_name_to_mongo_path["_id"] = "_id";    // Map _id to itself
 	}
 
 	// Build column names and types from collected field paths
@@ -777,7 +777,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 
 	// Group filters by column name to merge multiple filters on same column
 	map<string, bsoncxx::builder::basic::document> column_filters;
-	
+
 	for (const auto &filter_pair : filters->filters) {
 		idx_t col_idx = filter_pair.first;
 		if (col_idx >= column_names.size()) {
@@ -812,7 +812,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 				break;
 			}
 		}
-		
+
 		if (!has_column_filter) {
 			// Top-level operator like $or - add directly
 			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
@@ -897,7 +897,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	if (input.filters) {
 		// Convert DuckDB filters to MongoDB query
 		auto mongo_filter = ConvertFiltersToMongoQuery(input.filters, data.column_names, data.column_types,
-		                                              data.column_name_to_mongo_path);
+		                                               data.column_name_to_mongo_path);
 		query_filter = std::move(mongo_filter);
 	} else if (!result->filter_query.empty()) {
 		// Fall back to manual filter query if provided
