@@ -273,20 +273,22 @@ void MongoCatalog::ScanSchemas(ClientContext &context, std::function<void(Schema
 	auto system_transaction = CatalogTransaction::GetSystemTransaction(GetDatabase());
 	string first_non_system_schema;
 
-	// Create "main" schema when scanning all databases
-	if (database_name.empty()) {
-		CreateSchemaInfo main_schema_info;
-		main_schema_info.schema = "main";
-		main_schema_info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
-		auto main_schema_entry = CreateSchema(system_transaction, main_schema_info);
-		if (main_schema_entry) {
-			auto &main_schema = main_schema_entry->Cast<MongoSchemaEntry>();
-			// "main" schema doesn't correspond to a real MongoDB database, so use empty string
-			auto default_generator =
-			    make_uniq<MongoCollectionGenerator>(*this, main_schema, connection_string, "", this);
-			main_schema.SetDefaultGenerator(std::move(default_generator));
-			callback(main_schema);
-		}
+	// Create "main" schema - always create it for consistency with DuckDB's schema model
+	// When a specific database is attached, main schema uses that database
+	// When no database is specified, main schema doesn't correspond to a real MongoDB database
+	CreateSchemaInfo main_schema_info;
+	main_schema_info.schema = "main";
+	main_schema_info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
+	auto main_schema_entry = CreateSchema(system_transaction, main_schema_info);
+	if (main_schema_entry) {
+		auto &main_schema = main_schema_entry->Cast<MongoSchemaEntry>();
+		// When a specific database is attached, main schema uses that database
+		// When no database is specified, main schema doesn't correspond to a real MongoDB database
+		string main_generator_db_name = database_name.empty() ? "" : database_name;
+		auto default_generator =
+		    make_uniq<MongoCollectionGenerator>(*this, main_schema, connection_string, main_generator_db_name, this);
+		main_schema.SetDefaultGenerator(std::move(default_generator));
+		callback(main_schema);
 	}
 
 	for (const auto &schema_name : databases) {

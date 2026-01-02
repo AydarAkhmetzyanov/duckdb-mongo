@@ -19,8 +19,9 @@ statement ok
 ATTACH 'host=localhost port=27017 database=tpch_test' AS tpch_mongo (TYPE MONGO);
 
 # Set search path so PRAGMA tpch() queries can find the tables
+# The schema name matches the MongoDB database name (tpch_test)
 statement ok
-SET search_path='tpch_mongo.tpch';
+SET search_path='tpch_mongo.tpch_test';
 
 # Run TPC-H queries 1-9
 loop i 1 9

@@ -35,7 +35,14 @@ unique_ptr<Catalog> MongoStorageAttach(optional_ptr<StorageExtensionInfo> storag
 		// Build MongoDB connection string.
 		string host = params.count("host") ? params["host"] : "localhost";
 		string port = params.count("port") ? params["port"] : "27017";
-		database_name = params.count("dbname") ? params["dbname"] : "";
+		// Support both "dbname" and "database" parameters
+		if (params.count("dbname")) {
+			database_name = params["dbname"];
+		} else if (params.count("database")) {
+			database_name = params["database"];
+		} else {
+			database_name = "";
+		}
 		string username = params.count("user") ? params["user"] : "";
 		string password = params.count("password") ? params["password"] : "";
 		string auth_source = params.count("authsource") ? params["authsource"] : "";
