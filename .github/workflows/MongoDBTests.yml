@@ -44,8 +44,16 @@ jobs:
         # Create symlink if ninja is in /usr/bin but vcpkg expects /usr/local/bin
         if [ -f /usr/bin/ninja ] && [ ! -f /usr/local/bin/ninja ]; then
           sudo mkdir -p /usr/local/bin
-          sudo ln -s /usr/bin/ninja /usr/local/bin/ninja
+          sudo ln -sf /usr/bin/ninja /usr/local/bin/ninja
         fi
+        # Verify ninja is accessible and executable
+        /usr/local/bin/ninja --version || /usr/bin/ninja --version
+        # Ensure ninja is executable
+        sudo chmod +x /usr/bin/ninja
+        [ -f /usr/local/bin/ninja ] && sudo chmod +x /usr/local/bin/ninja || true
+        # Add ninja directories to PATH for vcpkg (GITHUB_PATH persists across steps)
+        echo "/usr/bin" >> $GITHUB_PATH
+        echo "/usr/local/bin" >> $GITHUB_PATH
 
     - name: Install mongosh
       run: |
@@ -78,7 +86,15 @@ jobs:
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11.1
       with:
-        vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+        # Use vcpkg commit with mongo-c-driver 1.30.3 which includes the CMP0042 fix.
+        # The default commit (ce613c41372b23b1f51333815feb3edd87ef8a8b) has mongo-c-driver 1.30.2
+        # which fails on macOS with CMake 4.0+ due to deprecated cmake_policy(SET CMP0042 OLD).
+        # This is the immediate next commit after the default, minimizing risk of other breakage.
+        vcpkgGitCommitId: 9aa0650e5c8d23fe66701bafb3ec03ac732a3ff1
+      env:
+        # Ensure ninja is available to vcpkg during setup
+        PATH: /usr/bin:/usr/local/bin:$PATH
+        CMAKE_MAKE_PROGRAM: /usr/bin/ninja
 
     - name: Build extension
       env:
