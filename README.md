@@ -243,7 +243,7 @@ LOAD '/path/to/mongo.duckdb_extension';
 
 ### Attaching MongoDB Databases
 
-**Key-value format (recommended):**
+**Key-value format:**
 ```sql
 ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
 ATTACH 'host=localhost port=27017 user=myuser password=mypass dbname=mydb' AS mongo_db (TYPE MONGO);
@@ -255,7 +255,56 @@ ATTACH 'host=cluster0.xxxxx.mongodb.net user=myuser password=mypass srv=true' AS
 ATTACH 'mongodb://user:pass@localhost:27017/mydb' AS mongo_db (TYPE MONGO);
 ```
 
-**Parameters:** `host`, `port` (default: 27017), `dbname`, `user`, `password`, `authsource` (default: admin), `srv` (for Atlas), `options`
+**Connection Parameters:**
+
+| Name | Description | Default |
+|------|-------------|---------|
+| `host` | MongoDB hostname or IP address | `localhost` |
+| `port` | MongoDB port number | `27017` |
+| `user` / `username` | MongoDB username | - |
+| `password` | MongoDB password | - |
+| `dbname` / `database` | Specific database to attach (empty = all databases) | - |
+| `authsource` | Authentication database | `admin` |
+| `srv` | Use SRV connection format (for MongoDB Atlas) | `false` |
+| `options` | Additional MongoDB connection string query parameters (e.g., `readPreference=secondary`) | - |
+
+**Using DuckDB Secrets (recommended for production):**
+
+Store credentials securely using DuckDB Secrets instead of embedding them in connection strings:
+
+```sql
+-- Create a secret with MongoDB credentials
+CREATE SECRET mongo_creds (
+    TYPE mongo,
+    HOST 'cluster0.xxxxx.mongodb.net',
+    USER 'myuser',
+    PASSWORD 'mypassword',
+    SRV 'true'
+);
+
+-- Attach using the secret
+ATTACH '' AS atlas_db (TYPE mongo, SECRET 'mongo_creds');
+```
+
+**Secret Parameters:**
+
+| Name | Description | Default |
+|------|-------------|---------|
+| `host` | MongoDB hostname or IP address | `localhost` |
+| `port` | MongoDB port number | `27017` |
+| `user` / `username` | MongoDB username | - |
+| `password` | MongoDB password | - |
+| `database` / `dbname` | Specific database to attach | - |
+| `authsource` | Authentication database | - |
+| `srv` | Use SRV connection format (for MongoDB Atlas) | `false` |
+
+**Default secret:** Create an unnamed secret to use as the default for all ATTACH operations:
+```sql
+CREATE SECRET (TYPE mongo, HOST 'localhost', USER 'myuser', PASSWORD 'mypass');
+ATTACH '' AS mongo_db (TYPE mongo);  -- Uses __default_mongo automatically
+-- Or provide additional options that merge with the secret:
+ATTACH 'dbname=mydb' AS mongo_db (TYPE mongo);  -- Uses secret + overrides/adds dbname
+```
 
 **Querying after ATTACH:**
 ```sql
@@ -276,7 +325,18 @@ SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection',
 
 Samples documents (default: 100, configurable via `sample_size`):
 
-- **Type Mapping**: String→VARCHAR, Number→BIGINT/DOUBLE, Boolean→BOOLEAN, Date→TIMESTAMP, ObjectId→VARCHAR, Arrays/Nested→JSON
+**BSON Type Mapping:**
+
+| BSON Type | DuckDB Type |
+|-----------|-------------|
+| String | VARCHAR |
+| Int32 / Int64 | BIGINT |
+| Double | DOUBLE |
+| Boolean | BOOLEAN |
+| Date | TIMESTAMP |
+| ObjectId | VARCHAR |
+| Arrays / Nested Documents | VARCHAR (JSON string) |
+
 - **Nested Documents**: Flattened with underscore-separated names (e.g., `user_address_city`), up to 5 levels deep
 - **Type Conflicts**: Frequency-based resolution (VARCHAR if >70%, numeric if ≥30%, defaults to VARCHAR)
 - **Missing Fields**: NULL values
