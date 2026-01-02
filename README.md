@@ -307,11 +307,47 @@ ATTACH 'dbname=mydb' AS mongo_db (TYPE mongo);  -- Uses secret + overrides/adds 
 ```
 
 **Querying after ATTACH:**
+
 ```sql
-SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'mongo_db';
-SHOW TABLES FROM mydb;
-SELECT * FROM mydb.mycollection;
-SELECT status, COUNT(*) FROM mydb.mycollection WHERE status = 'active' GROUP BY status;
+-- Attach to MongoDB
+ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
+
+-- Show all tables (collections) in all databases
+SHOW ALL TABLES;
+┌──────────┬──────────────────────┬──────────────┬──────────────────────────────────────┬──────────────────────────────────────────────┬───────────┐
+│ database │       schema         │     name     │           column_names                │              column_types                     │ temporary │
+│ varchar  │      varchar         │   varchar    │            varchar[]                 │                  varchar[]                    │  boolean  │
+├──────────┼──────────────────────┼──────────────┼──────────────────────────────────────┼──────────────────────────────────────────────┼───────────┤
+│ mongo_db │ duckdb_mongo_test    │ orders       │ [_id, order_id, customer_id, items,  │ [VARCHAR, VARCHAR, VARCHAR, VARCHAR, DOUBLE,  │ false     │
+│          │                      │              │  total, status, order_date]          │  VARCHAR, TIMESTAMP]                         │           │
+│ mongo_db │ duckdb_mongo_test    │ products     │ [_id, name, price, category]          │ [VARCHAR, VARCHAR, DOUBLE, VARCHAR]          │ false     │
+│ mongo_db │ tpch_test            │ lineitem     │ [_id, l_orderkey, l_partkey, ...]    │ [VARCHAR, BIGINT, BIGINT, ...]                │ false     │
+│ mongo_db │ tpch_test            │ orders       │ [_id, o_orderkey, o_custkey, ...]    │ [VARCHAR, BIGINT, BIGINT, ...]                │ false     │
+└──────────┴──────────────────────┴──────────────┴──────────────────────────────────────┴──────────────────────────────────────────────┴───────────┘
+
+-- Select data from a specific collection
+SELECT order_id, status, total FROM mongo_db.duckdb_mongo_test.orders LIMIT 3;
+┌──────────┬───────────┬──────────┐
+│ order_id │  status   │  total   │
+│ varchar  │  varchar  │  double  │
+├──────────┼───────────┼──────────┤
+│ ORD-001  │ completed │ 1059.97  │
+│ ORD-002  │ pending   │  299.99  │
+│ ORD-003  │ completed │  450.00  │
+└──────────┴───────────┴──────────┘
+
+-- Query with aggregation
+SELECT status, COUNT(*) as count, SUM(total) as total_revenue 
+FROM mongo_db.duckdb_mongo_test.orders 
+GROUP BY status;
+┌───────────┬───────┬──────────────┐
+│  status   │ count │ total_revenue│
+│  varchar  │ int64 │    double    │
+├───────────┼───────┼──────────────┤
+│ completed │   150 │   125000.50  │
+│ pending   │    45 │    15000.25  │
+│ cancelled │    10 │     5000.00  │
+└───────────┴───────┴──────────────┘
 ```
 
 **Using mongo_scan directly:**
