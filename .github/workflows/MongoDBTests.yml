@@ -140,7 +140,10 @@ jobs:
           exit 1
         fi
         # Extract test case count from "All tests passed (X assertions in Y test cases)"
-        TEST_CASES=$(grep -oP '(?<=All tests passed \([0-9]+ assertions in )[0-9]+(?= test cases\))' test.log || echo "0")
+        TEST_CASES=$(grep "All tests passed" test.log | sed -n 's/.*assertions in \([0-9]*\) test cases.*/\1/p' | head -1)
+        if [ -z "$TEST_CASES" ]; then
+          TEST_CASES="0"
+        fi
         if [ "$TEST_CASES" -lt "13" ]; then
           echo "ERROR: Expected at least 13 test cases, but only $TEST_CASES ran!"
           echo "Some tests may have been skipped."
