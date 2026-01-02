@@ -42,6 +42,7 @@ If you want to run `make test` directly, you need to:
 2. **Create test data**:
    ```bash
    ./test/create-mongo-tables.sh
+   ./test/create-tpch-test-db.sh  # Creates TPC-H test database (sf=0.01)
    ```
 
 3. **Run tests**:
@@ -51,13 +52,20 @@ If you want to run `make test` directly, you need to:
    
    The `MONGODB_TEST_DATABASE_AVAILABLE` environment variable is automatically set by the Makefile.
 
-The setup script creates a database `duckdb_mongo_test` with the following collections:
-- `users` - Sample user data with various types (strings, numbers, booleans, dates, nested objects, arrays)
-- `products` - Product data with nested specs
-- `orders` - Order data with nested arrays
-- `empty_collection` - Empty collection for edge case testing
-- `type_conflicts` - Collection with type conflicts
-- `deeply_nested` - Collection with deeply nested documents
+The setup script creates two databases:
+
+1. **`duckdb_mongo_test`** - General test database with the following collections:
+   - `users` - Sample user data with various types (strings, numbers, booleans, dates, nested objects, arrays)
+   - `products` - Product data with nested specs
+   - `orders` - Order data with nested arrays
+   - `empty_collection` - Empty collection for edge case testing
+   - `type_conflicts` - Collection with type conflicts
+   - `deeply_nested` - Collection with deeply nested documents
+
+2. **`tpch_test`** - TPC-H test database (always scale factor 0.01) for unit tests:
+   - Contains all 8 TPC-H tables (region, nation, supplier, customer, part, partsupp, orders, lineitem)
+   - Always uses scale factor 0.01 (~60K lineitems) to match expected test results
+   - Separate from `tpch` database used for benchmarks (which can be any scale factor)
 
 Tests that require MongoDB use `require-env MONGODB_TEST_DATABASE_AVAILABLE` and will be skipped if the environment variable is not set.
 

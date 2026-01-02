@@ -38,7 +38,8 @@ jobs:
     - name: Install required ubuntu packages
       run: |
         sudo apt-get update -y -qq
-        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 python3-pip
+        pip3 install pymongo
         # Ensure ninja is available in the path vcpkg expects
         which ninja || (echo "ninja not found in PATH" && find /usr -name ninja 2>/dev/null || true)
         # Create symlink if ninja is in /usr/bin but vcpkg expects /usr/local/bin
@@ -111,11 +112,45 @@ jobs:
 
     - name: Create MongoDB test data
       run: |
+        set -e
+        echo "Creating general test database..."
         bash test/create-mongo-tables.sh
+        echo "Creating TPC-H test database (sf=0.01)..."
+        bash test/create-tpch-test-db.sh
+        echo "Verifying TPC-H test database was created..."
+        mongosh --host localhost:27017 --eval "
+          use tpch_test;
+          const count = db.lineitem.countDocuments();
+          if (count === 0) {
+            print('ERROR: tpch_test.lineitem is empty!');
+            quit(1);
+          }
+          print('✓ tpch_test.lineitem has ' + count + ' documents');
+        "
 
     - name: Test extension
       env:
         MONGODB_TEST_DATABASE_AVAILABLE: 1
       run: |
-        make test_release
+        echo "Running all tests (ensuring no skips)..."
+        make test_release 2>&1 | tee test.log
+        # Verify tests completed successfully
+        if ! grep -q "All tests passed" test.log; then
+          echo "ERROR: Tests did not complete successfully!"
+          exit 1
+        fi
+        # Extract test case count from "All tests passed (X assertions in Y test cases)"
+        TEST_CASES=$(grep -oP '(?<=All tests passed \([0-9]+ assertions in )[0-9]+(?= test cases\))' test.log || echo "0")
+        if [ "$TEST_CASES" -lt "13" ]; then
+          echo "ERROR: Expected at least 13 test cases, but only $TEST_CASES ran!"
+          echo "Some tests may have been skipped."
+          exit 1
+        fi
+        # Check for any explicit skip messages (excluding the success message)
+        if grep -i "skip" test.log | grep -v "All tests passed" | grep -v "test cases"; then
+          echo "ERROR: Some tests were skipped!"
+          grep -i "skip" test.log | grep -v "All tests passed" | grep -v "test cases"
+          exit 1
+        fi
+        echo "✓ All $TEST_CASES test cases executed successfully (no skips)"
 

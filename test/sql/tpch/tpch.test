@@ -1,6 +1,12 @@
 # name: test/sql/tpch/tpch.test
 # description: Run TPC-H queries over MongoDB collections
 # group: [tpch]
+#
+# IMPORTANT: This test uses a separate test database (tpch_test) that is always sf=0.01.
+# The expected results are from duckdb/extension/tpch/dbgen/answers/sf0.01/
+# 
+# To set up the test database, run:
+#   test/create-tpch-test-db.sh
 
 require tpch
 
@@ -8,10 +14,8 @@ require mongo
 
 require-env MONGODB_TEST_DATABASE_AVAILABLE
 
-# Attach MongoDB database with TPC-H data
-# The database should be created by scripts/create-tpch-mongo.sh
 statement ok
-ATTACH 'host=localhost port=27017 database=tpch' AS tpch_mongo (TYPE MONGO);
+ATTACH 'host=localhost port=27017 database=tpch_test' AS tpch_mongo (TYPE MONGO);
 
 # Set search path so PRAGMA tpch() queries can find the tables
 statement ok

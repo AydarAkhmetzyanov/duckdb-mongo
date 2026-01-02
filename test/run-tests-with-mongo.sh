@@ -36,6 +36,13 @@ fi
 echo "Creating test data..."
 bash test/create-mongo-tables.sh
 
+# Create TPC-H test database (always sf=0.01)
+echo "Creating TPC-H test database..."
+bash test/create-tpch-test-db.sh || {
+    echo "Warning: Failed to create TPC-H test database. TPC-H tests will be skipped."
+    echo "You can create it manually with: bash test/create-tpch-test-db.sh"
+}
+
 # Set environment variable
 export MONGODB_TEST_DATABASE_AVAILABLE=1
 

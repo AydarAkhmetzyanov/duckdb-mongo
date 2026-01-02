@@ -31,6 +31,9 @@ struct MongoScanData : public TableFunctionData {
 	// Schema information
 	vector<string> column_names;
 	vector<LogicalType> column_types;
+	// Mapping from flattened column name to original MongoDB path (for filter pushdown)
+	// e.g., "address_city" -> "address.city", "l_returnflag" -> "l_returnflag"
+	unordered_map<string, string> column_name_to_mongo_path;
 
 	MongoScanData() : sample_size(100) {
 	}
@@ -53,10 +56,12 @@ struct MongoScanState : public LocalTableFunctionState {
 
 // Schema inference functions
 void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_size,
-                              std::vector<std::string> &column_names, std::vector<LogicalType> &column_types);
+                              std::vector<std::string> &column_names, std::vector<LogicalType> &column_types,
+                              std::unordered_map<std::string, std::string> &column_name_to_mongo_path);
 
 void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &prefix, int depth,
-                       std::unordered_map<std::string, std::vector<LogicalType>> &field_types);
+                       std::unordered_map<std::string, std::vector<LogicalType>> &field_types,
+                       std::unordered_map<std::string, std::string> &flattened_to_mongo_path);
 
 LogicalType InferTypeFromBSON(const bsoncxx::document::element &element);
 

@@ -13,7 +13,9 @@
 #include "duckdb/common/enums/physical_operator_type.hpp"
 #include <bsoncxx/builder/basic/document.hpp>
 #include <bsoncxx/builder/basic/array.hpp>
+#include <algorithm>
 #include <sstream>
+#include <cctype>
 
 namespace duckdb {
 
@@ -202,7 +204,8 @@ LogicalType ResolveTypeConflict(const std::vector<LogicalType> &types) {
 }
 
 void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &prefix, int depth,
-                       std::unordered_map<std::string, vector<LogicalType>> &field_types) {
+                       std::unordered_map<std::string, vector<LogicalType>> &field_types,
+                       std::unordered_map<std::string, std::string> &flattened_to_mongo_path) {
 	const int MAX_DEPTH = 5;
 
 	if (depth > MAX_DEPTH) {
@@ -216,12 +219,15 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 	for (const auto &element : doc) {
 		std::string field_name = std::string(element.key().data(), element.key().length());
 		std::string full_path = prefix.empty() ? field_name : prefix + "_" + field_name;
+		// Track original MongoDB path: use dots for nested fields, original name for top-level
+		std::string mongo_path = prefix.empty() ? field_name : prefix + "." + field_name;
+		flattened_to_mongo_path[full_path] = mongo_path;
 
 		switch (element.type()) {
 		case bsoncxx::type::k_document: {
 			// Recursively process nested document
 			auto nested_doc = element.get_document().value;
-			CollectFieldPaths(nested_doc, full_path, depth + 1, field_types);
+			CollectFieldPaths(nested_doc, full_path, depth + 1, field_types, flattened_to_mongo_path);
 			// Also store the document itself as JSON
 			field_types[full_path].push_back(LogicalType::VARCHAR);
 			break;
@@ -236,7 +242,10 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 				if (first_element.type() == bsoncxx::type::k_document) {
 					// Array of objects - collect paths with array prefix
 					auto nested_doc = first_element.get_document().value;
-					CollectFieldPaths(nested_doc, full_path + "_item", depth + 1, field_types);
+					std::string array_item_path = full_path + "_item";
+					std::string array_item_mongo_path = mongo_path + ".item";
+					flattened_to_mongo_path[array_item_path] = array_item_mongo_path;
+					CollectFieldPaths(nested_doc, array_item_path, depth + 1, field_types, flattened_to_mongo_path);
 				}
 			}
 			break;
@@ -252,7 +261,8 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 }
 
 void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_size, vector<string> &column_names,
-                              vector<LogicalType> &column_types) {
+                              vector<LogicalType> &column_types,
+                              unordered_map<string, string> &column_name_to_mongo_path) {
 	std::unordered_map<std::string, vector<LogicalType>> field_types;
 
 	// Sample documents
@@ -263,7 +273,7 @@ void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_s
 
 	int64_t count = 0;
 	for (const auto &doc : cursor) {
-		CollectFieldPaths(doc, "", 0, field_types);
+		CollectFieldPaths(doc, "", 0, field_types, column_name_to_mongo_path);
 		count++;
 		if (count >= sample_size) {
 			break;
@@ -274,6 +284,7 @@ void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_s
 	// If collection is empty, we still need at least one column
 	if (field_types.find("_id") == field_types.end()) {
 		field_types["_id"] = {LogicalType::VARCHAR}; // ObjectId as string
+		column_name_to_mongo_path["_id"] = "_id"; // Map _id to itself
 	}
 
 	// Build column names and types from collected field paths
@@ -500,7 +511,8 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 	auto collection = db[result->collection_name];
 
 	// Infer schema
-	InferSchemaFromDocuments(collection, result->sample_size, result->column_names, result->column_types);
+	InferSchemaFromDocuments(collection, result->sample_size, result->column_names, result->column_types,
+	                         result->column_name_to_mongo_path);
 
 	// Set return types and names
 	return_types = result->column_types;
@@ -755,7 +767,8 @@ bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, c
 // Convert DuckDB filters to MongoDB query
 bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters,
                                                     const vector<string> &column_names,
-                                                    const vector<LogicalType> &column_types) {
+                                                    const vector<LogicalType> &column_types,
+                                                    const unordered_map<string, string> &column_name_to_mongo_path) {
 	bsoncxx::builder::basic::document query_builder;
 
 	if (!filters || filters->filters.empty()) {
@@ -764,7 +777,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 
 	// Group filters by column name to merge multiple filters on same column
 	map<string, bsoncxx::builder::basic::document> column_filters;
-
+	
 	for (const auto &filter_pair : filters->filters) {
 		idx_t col_idx = filter_pair.first;
 		if (col_idx >= column_names.size()) {
@@ -773,9 +786,18 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 
 		const auto &filter = filter_pair.second;
 		const string &column_name = column_names[col_idx];
+		// Convert flattened column name to MongoDB dot notation using stored mapping
+		string mongo_column_name;
+		auto path_it = column_name_to_mongo_path.find(column_name);
+		if (path_it != column_name_to_mongo_path.end()) {
+			mongo_column_name = path_it->second;
+		} else {
+			// Fallback: use column name as-is (top-level field)
+			mongo_column_name = column_name;
+		}
 		const LogicalType &column_type = col_idx < column_types.size() ? column_types[col_idx] : LogicalType::VARCHAR;
 
-		auto filter_doc = ConvertSingleFilterToMongo(*filter, column_name, column_type);
+		auto filter_doc = ConvertSingleFilterToMongo(*filter, mongo_column_name, column_type);
 		if (filter_doc.view().empty()) {
 			continue;
 		}
@@ -784,13 +806,13 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 		bsoncxx::types::bson_value::view column_filter_value;
 		bool has_column_filter = false;
 		for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
-			if (doc_it->key() == column_name) {
+			if (doc_it->key() == mongo_column_name) {
 				column_filter_value = doc_it->get_value();
 				has_column_filter = true;
 				break;
 			}
 		}
-
+		
 		if (!has_column_filter) {
 			// Top-level operator like $or - add directly
 			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
@@ -799,22 +821,25 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 			continue;
 		}
 
-		// Merge filters for same column
-		auto it = column_filters.find(column_name);
+		// Merge filters for same column (use MongoDB path as key)
+		auto it = column_filters.find(mongo_column_name);
 		if (it == column_filters.end()) {
-			bsoncxx::builder::basic::document col_doc;
 			if (column_filter_value.type() == bsoncxx::type::k_document) {
-				// Copy operators
+				// Already has operators like {$lt: value} - wrap in document
+				bsoncxx::builder::basic::document col_doc;
 				for (auto nested_it = column_filter_value.get_document().value.begin();
 				     nested_it != column_filter_value.get_document().value.end(); ++nested_it) {
 					col_doc.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
 				}
+				column_filters[mongo_column_name] = std::move(col_doc);
 			} else {
-				// Equality - use $eq
-				col_doc.append(bsoncxx::builder::basic::kvp("$eq", column_filter_value));
+				// Equality - store in column_filters to add at end
+				bsoncxx::builder::basic::document col_doc;
+				col_doc.append(bsoncxx::builder::basic::kvp(mongo_column_name, column_filter_value));
+				column_filters[mongo_column_name] = std::move(col_doc);
 			}
-			column_filters[column_name] = std::move(col_doc);
 		} else {
+			// Multiple filters on same column - merge into existing document
 			if (column_filter_value.type() == bsoncxx::type::k_document) {
 				// Merge operators
 				for (auto nested_it = column_filter_value.get_document().value.begin();
@@ -822,15 +847,31 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 					it->second.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
 				}
 			} else {
-				// Add as $eq
-				it->second.append(bsoncxx::builder::basic::kvp("$eq", column_filter_value));
+				// Equality with existing filters - shouldn't happen, but handle by replacing
+				it->second = bsoncxx::builder::basic::document {};
+				it->second.append(bsoncxx::builder::basic::kvp(mongo_column_name, column_filter_value));
 			}
 		}
 	}
 
-	// Add column filters to query
+	// Add column filters to query (using MongoDB dot notation)
 	for (auto &col_filter_pair : column_filters) {
-		query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, col_filter_pair.second.extract()));
+		// Extract once and check structure
+		auto col_doc = col_filter_pair.second.extract();
+		auto col_doc_view = col_doc.view();
+		auto it = col_doc_view.begin();
+		// Check if this is a direct equality filter (single key matching column name)
+		if (it != col_doc_view.end() && it->key() == col_filter_pair.first) {
+			auto next_it = it;
+			++next_it;
+			if (next_it == col_doc_view.end()) {
+				// Direct equality - add as {field: value}
+				query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, it->get_value()));
+				continue;
+			}
+		}
+		// Has operators - add as {field: {op: value}}
+		query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, col_doc));
 	}
 
 	return query_builder.extract();
@@ -855,7 +896,8 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	bsoncxx::document::view_or_value query_filter;
 	if (input.filters) {
 		// Convert DuckDB filters to MongoDB query
-		auto mongo_filter = ConvertFiltersToMongoQuery(input.filters, data.column_names, data.column_types);
+		auto mongo_filter = ConvertFiltersToMongoQuery(input.filters, data.column_names, data.column_types,
+		                                              data.column_name_to_mongo_path);
 		query_filter = std::move(mongo_filter);
 	} else if (!result->filter_query.empty()) {
 		// Fall back to manual filter query if provided
