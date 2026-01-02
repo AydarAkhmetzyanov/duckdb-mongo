@@ -22,12 +22,15 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 	const char *username = std::getenv("MONGO_ATLAS_USERNAME");
 	const char *password = std::getenv("MONGO_ATLAS_PASSWORD");
 	const char *hostname = std::getenv("MONGO_ATLAS_HOSTNAME");
-	if (!username || !password || !hostname) {
+	if (!username || !password) {
 		return; // Skip test if credentials not provided
 	}
+	// Hostname defaults to a specific test cluster if not provided
+	// Note: Test checks for hardcoded schemas/collections specific to this cluster
+	std::string hostname_str = hostname ? std::string(hostname) : "adl-testing-azure-amste.ki9ie.mongodb.net";
 
-	std::string connection_string = "mongodb+srv://" + std::string(username) + ":" + std::string(password) +
-	                                "@" + std::string(hostname) + "?retryWrites=true&w=majority";
+	std::string connection_string = "mongodb+srv://" + std::string(username) + ":" + std::string(password) + "@" +
+	                                std::string(hostname) + "?retryWrites=true&w=majority";
 
 	duckdb::DuckDB db(nullptr);
 	db.LoadStaticExtension<duckdb::MongoExtension>();
@@ -35,7 +38,8 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 
 	// Create or replace a temporary secret for MongoDB Atlas connection (without database name)
 	std::string create_secret_query =
-	    "CREATE OR REPLACE SECRET atlas_secret (TYPE mongo, HOST '" + std::string(hostname) + "', "
+	    "CREATE OR REPLACE SECRET atlas_secret (TYPE mongo, HOST '" + std::string(hostname) +
+	    "', "
 	    "USER '" +
 	    std::string(username) + "', PASSWORD '" + std::string(password) + "', SRV 'true')";
 	REQUIRE_NO_FAIL(con.Query(create_secret_query));
