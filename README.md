@@ -12,10 +12,12 @@ ATTACH 'host=localhost port=27017' AS mongo_db (TYPE MONGO);
 SELECT * FROM mongo_db.mydb.mycollection LIMIT 10;
 ```
 
-**Using Secrets (recommended for production):**
+**Using Secrets with MongoDB Atlas (recommended for production):**
+
+See the [DuckDB Secrets Manager documentation](https://duckdb.org/docs/stable/configuration/secrets_manager) for more details on managing secrets.
 
 ```sql
--- Create a secret with MongoDB credentials
+-- Create a secret with MongoDB Atlas credentials
 CREATE SECRET mongo_creds (
     TYPE mongo,
     HOST 'cluster0.xxxxx.mongodb.net',
@@ -24,12 +26,23 @@ CREATE SECRET mongo_creds (
     SRV 'true'
 );
 
--- Attach using the secret
-ATTACH 'dbname=mydb' AS atlas_db (TYPE mongo, SECRET 'mongo_creds');
+-- Attach using the secret (use readPreference=secondaryPreferred for replica sets)
+ATTACH 'dbname=mydb?readPreference=secondaryPreferred' AS atlas_db (TYPE mongo, SECRET 'mongo_creds');
 
 -- Query your collections
 SELECT * FROM atlas_db.mydb.mycollection;
 ```
+
+## Features
+
+- Direct SQL queries over MongoDB collections (no ETL/export)
+- **MongoDB Atlas support** via connection strings or DuckDB Secrets
+- Automatic schema inference (samples 100 documents by default)
+- Nested document flattening with underscore-separated names
+- BSON type mapping to DuckDB SQL types
+- **Filter pushdown**: WHERE clauses pushed to MongoDB to leverage indexes
+- Optional MongoDB query filters
+- Read-only (write support may be added)
 
 ## Installation
 
@@ -122,9 +135,11 @@ ATTACH 'mongodb://user:pass@localhost:27017/mydb' AS mongo_db (TYPE MONGO);
 | `srv` | Use SRV connection format (for MongoDB Atlas) | `false` | Both |
 | `options` | Additional MongoDB connection string query parameters | - | Connection string only |
 
+**Tip:** For replica sets (including MongoDB Atlas), use `readPreference=secondaryPreferred` to route reads to secondaries.
+
 ### Using DuckDB Secrets
 
-Store credentials securely using DuckDB Secrets instead of embedding them in connection strings:
+Store credentials securely using [DuckDB Secrets](https://duckdb.org/docs/stable/configuration/secrets_manager) instead of embedding them in connection strings:
 
 ```sql
 -- Create a secret with MongoDB credentials
@@ -137,7 +152,7 @@ CREATE SECRET mongo_creds (
 );
 
 -- Attach using the secret (options in ATTACH path merge with secret)
-ATTACH 'dbname=mydb' AS atlas_db (TYPE mongo, SECRET 'mongo_creds');
+ATTACH 'dbname=mydb?readPreference=secondaryPreferred' AS atlas_db (TYPE mongo, SECRET 'mongo_creds');
 ```
 
 **Default secret:** Create an unnamed secret to use as the default for all ATTACH operations:
@@ -261,16 +276,6 @@ The extension automatically infers schemas by sampling documents (default: 100, 
 - **Nested Documents**: Flattened with underscore-separated names (e.g., `user_address_city`), up to 5 levels deep
 - **Type Conflicts**: Frequency-based resolution (VARCHAR if >70%, numeric if ≥30%, defaults to VARCHAR)
 - **Missing Fields**: NULL values
-
-### Features
-
-- Direct SQL queries over MongoDB collections (no ETL/export)
-- Automatic schema inference (samples 100 documents by default)
-- Nested document flattening with underscore-separated names
-- BSON type mapping to DuckDB SQL types
-- **Filter pushdown**: WHERE clauses pushed to MongoDB to leverage indexes
-- Optional MongoDB query filters
-- Read-only (write support may be added)
 
 ### Limitations
 
