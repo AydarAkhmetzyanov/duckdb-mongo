@@ -46,6 +46,17 @@ SELECT * FROM atlas_db.mydb.mycollection;
 
 ## Installation
 
+### From Community Extensions (Recommended)
+
+The easiest way to install the mongo extension is from the DuckDB community extensions repository:
+
+```sql
+INSTALL mongo FROM community;
+LOAD mongo;
+```
+
+After installation, you can use the extension as described in the [Connecting to MongoDB](#connecting-to-mongodb) section.
+
 ### From Source
 
 **Prerequisites:**
