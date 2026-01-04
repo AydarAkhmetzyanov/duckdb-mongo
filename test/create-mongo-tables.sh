@@ -156,6 +156,25 @@ db.orders.insertMany([
     total: 299.99,
     status: 'pending',
     order_date: new Date('2023-05-02T00:00:00Z')
+  },
+  {
+    order_id: 'ORD-003',
+    customer_id: ObjectId('507f1f77bcf86cd799439013'),
+    items: [],
+    total: 0,
+    status: 'cancelled',
+    order_date: new Date('2023-05-03T00:00:00Z')
+  },
+  {
+    order_id: 'ORD-004',
+    customer_id: ObjectId('507f1f77bcf86cd799439011'),
+    items: [
+      { product: 'Keyboard', quantity: 1 }
+    ],
+    notes: ['urgent', 'gift'],
+    total: 79.99,
+    status: 'pending',
+    order_date: new Date('2023-05-04T00:00:00Z')
   }
 ]);
 

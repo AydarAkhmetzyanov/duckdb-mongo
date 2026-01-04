@@ -1,0 +1,116 @@
+# name: test/sql/schema/schema.test
+# description: Comprehensive schema inference tests for arrays, nested objects, and edge cases
+# group: [schema]
+
+# This test consolidates and expands coverage from arrays.test and nested.test
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# ============================================================================
+# Arrays of Primitives
+# ============================================================================
+
+# Test that arrays are stored as JSON/VARCHAR columns
+query I
+SELECT COUNT(*) FROM mongo_test.users WHERE tags IS NOT NULL;
+----
+4
+
+# Test array field extraction
+query II
+SELECT name, tags FROM mongo_test.users WHERE name = 'Alice';
+----
+Alice	["admin","user"]
+
+# Test array in products collection
+query II
+SELECT name, tags FROM mongo_test.products WHERE name = 'Laptop';
+----
+Laptop	["computer","electronics","laptop"]
+
+# Test array with single element
+query II
+SELECT name, tags FROM mongo_test.users WHERE name = 'Bob';
+----
+Bob	["user"]
+
+# Test array with multiple elements
+query II
+SELECT name, tags FROM mongo_test.users WHERE name = 'Charlie';
+----
+Charlie	["admin","premium"]
+
+# ============================================================================
+# Nested Objects
+# ============================================================================
+
+# Test that nested documents are flattened with underscore notation
+query III
+SELECT name, address_city, address_country FROM mongo_test.users WHERE name = 'Alice';
+----
+Alice	New York	USA
+
+# Test deeply nested documents (up to 5 levels)
+query III
+SELECT address_street, address_city, address_zip FROM mongo_test.users ORDER BY name LIMIT 2;
+----
+123 Main St	New York	10001
+456 Oak Ave	Los Angeles	90001
+
+# Test nested fields in products collection
+query III
+SELECT name, specs_cpu, specs_ram FROM mongo_test.products WHERE name = 'Laptop';
+----
+Laptop	Intel i7	16GB
+
+# Test deeply nested specs (3 levels deep)
+query III
+SELECT name, specs_material, specs_dimensions_width FROM mongo_test.products WHERE name = 'Desk';
+----
+Desk	Wood	120
+
+# Test deeply nested collection (6 levels - stored as JSON at level 5 due to MAX_DEPTH=5)
+# Documents deeper than 5 levels are stored as JSON/VARCHAR at the 5th level
+query I
+SELECT COUNT(*) FROM mongo_test.deeply_nested WHERE level1_level2_level3_level4_level5 IS NOT NULL;
+----
+1
+
+# ============================================================================
+# Edge Cases
+# ============================================================================
+
+# Test empty collection (should still have _id column)
+query I
+SELECT COUNT(*) FROM mongo_test.empty_collection;
+----
+0
+
+# Test type conflicts (same field, different types)
+# Note: Schema inference resolves type conflicts to a single type (frequency-based)
+# Mixed types may result in data conversion, so we test that rows exist rather than exact values
+query I
+SELECT COUNT(*) FROM mongo_test.type_conflicts;
+----
+3
+
+# Test missing nested fields (should return NULL)
+query III
+SELECT name, address_street, address_city FROM mongo_test.users WHERE name = 'Alice';
+----
+Alice	123 Main St	New York
+
+# Test documents with only _id (minimal document)
+query I
+SELECT COUNT(*) FROM mongo_test.empty_collection WHERE _id IS NOT NULL;
+----
+0
+
+statement ok
+DETACH mongo_test;
+

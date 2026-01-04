@@ -13,6 +13,7 @@
 #include "duckdb/common/enums/physical_operator_type.hpp"
 #include <bsoncxx/builder/basic/document.hpp>
 #include <bsoncxx/builder/basic/array.hpp>
+#include <bsoncxx/json.hpp>
 #include <algorithm>
 #include <sstream>
 #include <cctype>
@@ -244,6 +245,10 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 					flattened_to_mongo_path[array_item_path] = array_item_mongo_path;
 					CollectFieldPaths(nested_doc, array_item_path, depth + 1, field_types, flattened_to_mongo_path);
 				}
+				// TODO: Support arrays of arrays (e.g., matrix: [[1,2], [3,4]])
+				// Would create columns like matrix_item_item for matrix[0][0]
+				// Implementation: Check if first_element.type() == bsoncxx::type::k_array,
+				// then recursively process nested array elements
 			}
 			break;
 		}
@@ -336,6 +341,93 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		return found ? result : bsoncxx::document::element {};
 	};
 
+	// Extract value from array element field
+	// Returns value from first array element, handles arrays of objects recursively
+	// Note: Only handles arrays of objects, not arrays of arrays (e.g., [[1,2]] stored as JSON)
+	auto getArrayElementValue = [&](const std::string &column_name) -> bsoncxx::document::element {
+		std::function<bsoncxx::document::element(bsoncxx::document::view, const std::string &, bool)> navigatePath =
+		    [&](bsoncxx::document::view current_doc, const std::string &path,
+		        bool expect_array) -> bsoncxx::document::element {
+			if (path.empty()) {
+				return bsoncxx::document::element {};
+			}
+
+			size_t item_pos = path.find("_item");
+			if (item_pos != std::string::npos) {
+				std::string array_path = path.substr(0, item_pos);
+				std::string remaining_path = path.substr(item_pos + 5);
+				if (!remaining_path.empty() && remaining_path[0] == '_') {
+					remaining_path = remaining_path.substr(1);
+				}
+
+				std::istringstream iss(array_path);
+				std::string segment;
+				bsoncxx::document::view doc_view = current_doc;
+				bsoncxx::document::element array_element;
+
+				while (std::getline(iss, segment, '_')) {
+					auto element = doc_view[segment];
+					if (!element) {
+						return bsoncxx::document::element {};
+					}
+					array_element = element;
+					if (array_element.type() == bsoncxx::type::k_document) {
+						doc_view = array_element.get_document().value;
+					} else {
+						break;
+					}
+				}
+
+				std::istringstream iss2(array_path);
+				std::string array_field_name;
+				while (std::getline(iss2, segment, '_')) {
+					array_field_name = segment;
+				}
+
+				auto arr_element = doc_view[array_field_name];
+				if (!arr_element || arr_element.type() != bsoncxx::type::k_array) {
+					return bsoncxx::document::element {};
+				}
+
+				auto array = arr_element.get_array().value;
+				auto it = array.begin();
+				if (it == array.end()) {
+					return bsoncxx::document::element {};
+				}
+
+				auto first_element = *it;
+				if (first_element.type() != bsoncxx::type::k_document) {
+					// TODO: Support arrays of arrays - if first_element.type() == k_array,
+					// recursively extract from nested array (e.g., matrix_item_item for matrix[0][0])
+					return bsoncxx::document::element {};
+				}
+
+				return navigatePath(first_element.get_document().value, remaining_path, false);
+			} else {
+				std::istringstream iss(path);
+				std::string segment;
+				bsoncxx::document::view doc_view = current_doc;
+				bsoncxx::document::element result;
+
+				while (std::getline(iss, segment, '_')) {
+					auto element = doc_view[segment];
+					if (!element) {
+						return bsoncxx::document::element {};
+					}
+					result = element;
+					if (result.type() == bsoncxx::type::k_document) {
+						doc_view = result.get_document().value;
+					} else {
+						break;
+					}
+				}
+				return result;
+			}
+		};
+
+		return navigatePath(doc, column_name, false);
+	};
+
 	for (idx_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
@@ -344,8 +436,13 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		auto element = doc[column_name];
 
 		if (!element) {
-			// Try path-based lookup for nested fields
-			element = getElementByPath(column_name);
+			// Check if this is an array element column
+			if (column_name.find("_item") != std::string::npos) {
+				element = getArrayElementValue(column_name);
+			} else {
+				// Try path-based lookup for nested fields
+				element = getElementByPath(column_name);
+			}
 			if (!element || element.type() == bsoncxx::type::k_null) {
 				// Field not found - set to NULL
 				FlatVector::SetNull(output.data[col_idx], row_idx, true);
@@ -377,9 +474,6 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 			} else if (element.type() == bsoncxx::type::k_null) {
 				str_val = "null";
 			} else if (element.type() == bsoncxx::type::k_binary) {
-				// Binary data - convert to base64 or hex representation
-				// For now, just indicate binary data exists
-				// TODO: Could convert to base64 using the binary data if needed
 				str_val = "<binary data>";
 			} else if (element.type() == bsoncxx::type::k_undefined) {
 				str_val = "undefined";
@@ -778,11 +872,14 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 	for (const auto &filter_pair : filters->filters) {
 		idx_t col_idx = filter_pair.first;
 		if (col_idx >= column_names.size()) {
+			std::cerr << "[DEBUG] Skipping filter: col_idx " << col_idx << " >= column_names.size() "
+			          << column_names.size() << std::endl;
 			continue;
 		}
 
 		const auto &filter = filter_pair.second;
 		const string &column_name = column_names[col_idx];
+
 		// Convert flattened column name to MongoDB dot notation using stored mapping
 		string mongo_column_name;
 		auto path_it = column_name_to_mongo_path.find(column_name);
@@ -792,10 +889,57 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 			// Fallback: use column name as-is (top-level field)
 			mongo_column_name = column_name;
 		}
+
+		// Check if this is an _item column (array element column)
+		bool is_item_column = column_name.find("_item") != std::string::npos;
 		const LogicalType &column_type = col_idx < column_types.size() ? column_types[col_idx] : LogicalType::VARCHAR;
 
-		auto filter_doc = ConvertSingleFilterToMongo(*filter, mongo_column_name, column_type);
+		bsoncxx::document::value filter_doc = bsoncxx::builder::basic::document {}.extract();
+		if (is_item_column) {
+			// Convert items_item.product to array name and field path
+			size_t item_pos = mongo_column_name.find("_item");
+			if (item_pos != std::string::npos) {
+				string array_name = mongo_column_name.substr(0, item_pos);
+				string field_path = mongo_column_name.substr(item_pos + 5);
+
+				// Remove leading dot if present
+				if (!field_path.empty() && field_path[0] == '.') {
+					field_path = field_path.substr(1);
+				}
+
+				// Build $elemMatch query: {array_name: {$elemMatch: {field_path: value}}}
+				// Matches any element in the array, not just the first
+				auto elem_match_doc = ConvertSingleFilterToMongo(*filter, field_path, column_type);
+				if (!elem_match_doc.view().empty()) {
+					bsoncxx::builder::basic::document elem_match_builder;
+					for (auto doc_it = elem_match_doc.view().begin(); doc_it != elem_match_doc.view().end(); ++doc_it) {
+						elem_match_builder.append(bsoncxx::builder::basic::kvp(doc_it->key(), doc_it->get_value()));
+					}
+					bsoncxx::builder::basic::document array_filter_builder;
+					array_filter_builder.append(
+					    bsoncxx::builder::basic::kvp("$elemMatch", elem_match_builder.extract()));
+					bsoncxx::builder::basic::document final_doc;
+					final_doc.append(bsoncxx::builder::basic::kvp(array_name, array_filter_builder.extract()));
+					filter_doc = final_doc.extract();
+				} else {
+					continue;
+				}
+			} else {
+				continue;
+			}
+		} else {
+			filter_doc = ConvertSingleFilterToMongo(*filter, mongo_column_name, column_type);
+		}
+
 		if (filter_doc.view().empty()) {
+			continue;
+		}
+
+		// For _item columns, add directly to query (already in $elemMatch format)
+		if (is_item_column) {
+			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
+				query_builder.append(bsoncxx::builder::basic::kvp(doc_it->key(), doc_it->get_value()));
+			}
 			continue;
 		}
 
@@ -811,7 +955,7 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 		}
 
 		if (!has_column_filter) {
-			// Top-level operator like $or - add directly
+			// Top-level operator like $or - add directly to query
 			for (auto doc_it = filter_doc.view().begin(); doc_it != filter_doc.view().end(); ++doc_it) {
 				query_builder.append(bsoncxx::builder::basic::kvp(doc_it->key(), doc_it->get_value()));
 			}
@@ -830,44 +974,36 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 				}
 				column_filters[mongo_column_name] = std::move(col_doc);
 			} else {
-				// Equality - store in column_filters to add at end
 				bsoncxx::builder::basic::document col_doc;
 				col_doc.append(bsoncxx::builder::basic::kvp(mongo_column_name, column_filter_value));
 				column_filters[mongo_column_name] = std::move(col_doc);
 			}
 		} else {
-			// Multiple filters on same column - merge into existing document
 			if (column_filter_value.type() == bsoncxx::type::k_document) {
-				// Merge operators
 				for (auto nested_it = column_filter_value.get_document().value.begin();
 				     nested_it != column_filter_value.get_document().value.end(); ++nested_it) {
 					it->second.append(bsoncxx::builder::basic::kvp(nested_it->key(), nested_it->get_value()));
 				}
 			} else {
-				// Equality with existing filters - shouldn't happen, but handle by replacing
 				it->second = bsoncxx::builder::basic::document {};
 				it->second.append(bsoncxx::builder::basic::kvp(mongo_column_name, column_filter_value));
 			}
 		}
 	}
 
-	// Add column filters to query (using MongoDB dot notation)
+	// Add column filters to query
 	for (auto &col_filter_pair : column_filters) {
-		// Extract once and check structure
 		auto col_doc = col_filter_pair.second.extract();
 		auto col_doc_view = col_doc.view();
 		auto it = col_doc_view.begin();
-		// Check if this is a direct equality filter (single key matching column name)
 		if (it != col_doc_view.end() && it->key() == col_filter_pair.first) {
 			auto next_it = it;
 			++next_it;
 			if (next_it == col_doc_view.end()) {
-				// Direct equality - add as {field: value}
 				query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, it->get_value()));
 				continue;
 			}
 		}
-		// Has operators - add as {field: {op: value}}
 		query_builder.append(bsoncxx::builder::basic::kvp(col_filter_pair.first, col_doc));
 	}
 

@@ -1,0 +1,119 @@
+# name: test/sql/schema/array_items.test
+# description: Test extraction of values from array element columns (_item columns)
+# group: [schema]
+
+require mongo
+
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Test that array element columns extract actual values, not defaults
+query TTI
+SELECT order_id, items_item_product, items_item_quantity FROM mongo_test.orders WHERE order_id = 'ORD-001';
+----
+ORD-001	Laptop	1
+
+# Test array element with numeric types (price)
+query TTR
+SELECT order_id, items_item_product, items_item_price FROM mongo_test.orders WHERE order_id = 'ORD-001';
+----
+ORD-001	Laptop	999.99
+
+# Test array element with different order
+query TTI
+SELECT order_id, items_item_product, items_item_quantity FROM mongo_test.orders WHERE order_id = 'ORD-002';
+----
+ORD-002	Desk	1
+
+# Test that all array element fields are extracted correctly together
+query TTIR
+SELECT order_id, items_item_product, items_item_quantity, items_item_price FROM mongo_test.orders WHERE order_id IN ('ORD-001', 'ORD-002') ORDER BY order_id;
+----
+ORD-001	Laptop	1	999.99
+ORD-002	Desk	1	299.99
+
+# Test filtering on array element columns (filter pushdown to MongoDB using $elemMatch - matches any element)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Laptop';
+----
+1
+
+# Test filtering with different value
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Desk';
+----
+1
+
+# Test filtering with value that exists in non-first element
+# With $elemMatch, this matches ORD-001 which has Mouse at items[1]
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Mouse';
+----
+1
+
+# Test filtering with non-matching value (doesn't exist in any element)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Tablet';
+----
+0
+
+# Test filtering with numeric comparison
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_price > 500;
+----
+1
+
+# Test filtering with multiple conditions (AND)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Laptop' AND items_item_quantity = 1;
+----
+1
+
+# Test that NULL is returned for missing array element fields
+# (This happens when array is empty - ORD-003 has empty items array)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product IS NULL;
+----
+1
+
+# Test empty array (ORD-003 has empty items array)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE order_id = 'ORD-003' AND items_item_product IS NULL;
+----
+1
+
+# Test array with missing fields (ORD-004 items[0] missing price field)
+query TTI
+SELECT order_id, items_item_product, items_item_quantity FROM mongo_test.orders WHERE order_id = 'ORD-004';
+----
+ORD-004	Keyboard	1
+
+# Test that missing field in array element returns NULL
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE order_id = 'ORD-004' AND items_item_price IS NULL;
+----
+1
+
+# Test multiple arrays in same document (ORD-004 has both items and notes arrays)
+query II
+SELECT order_id, notes FROM mongo_test.orders WHERE order_id = 'ORD-004';
+----
+ORD-004	["urgent","gift"]
+
+# Test filtering on empty array (should not match)
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Laptop' AND order_id = 'ORD-003';
+----
+0
+
+# Test filtering with OR condition on array elements
+query I
+SELECT COUNT(*) FROM mongo_test.orders WHERE items_item_product = 'Laptop' OR items_item_product = 'Desk';
+----
+2
+
+statement ok
+DETACH mongo_test;
+
