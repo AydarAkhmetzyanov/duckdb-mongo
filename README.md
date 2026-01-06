@@ -247,9 +247,6 @@ ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE 
 ### Basic Queries
 
 ```sql
--- Attach to MongoDB (using test database from setup above)
-ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
-
 -- Show attached databases
 SHOW DATABASES;
 ┌───────────────┐
