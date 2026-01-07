@@ -22,6 +22,7 @@ QUERY_NUM="all"
 ITERATIONS=3
 VERBOSE=false
 SHOW_RESULTS=false
+QUERY_SET=false
 
 for arg in "$@"; do
     case $arg in
@@ -32,14 +33,16 @@ for arg in "$@"; do
             SHOW_RESULTS=true
             ;;
         [0-9]*)
-            if [ "$QUERY_NUM" = "all" ] && [ "$arg" -ge 1 ] && [ "$arg" -le 22 ]; then
+            if [ "$QUERY_SET" = false ] && [ "$arg" -ge 1 ] && [ "$arg" -le 22 ]; then
                 QUERY_NUM=$arg
-            elif [ "$ITERATIONS" = "3" ] && [ "$arg" -ge 1 ]; then
+                QUERY_SET=true
+            elif [ "$QUERY_SET" = true ] && [ "$arg" -ge 1 ]; then
                 ITERATIONS=$arg
             fi
             ;;
         all)
             QUERY_NUM="all"
+            QUERY_SET=true
             ;;
     esac
 done
