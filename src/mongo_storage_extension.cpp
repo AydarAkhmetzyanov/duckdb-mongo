@@ -63,9 +63,8 @@ unique_ptr<Catalog> MongoStorageAttach(optional_ptr<StorageExtensionInfo> storag
 		string tls = params.count("tls") ? params["tls"] : "";
 		string ssl = params.count("ssl") ? params["ssl"] : "";
 		string tlsCAFile = params.count("tls_ca_file") ? params["tls_ca_file"] : "";
-		string tlsAllowInvalidCertificates = params.count("tls_allow_invalid_certificates")
-		                                         ? params["tls_allow_invalid_certificates"]
-		                                         : "";
+		string tlsAllowInvalidCertificates =
+		    params.count("tls_allow_invalid_certificates") ? params["tls_allow_invalid_certificates"] : "";
 
 		// Check if using SRV connection (for MongoDB Atlas).
 		bool use_srv = false;

@@ -33,10 +33,9 @@ string BuildMongoConnectionString(const KeyValueSecret &kv_secret, const string 
 	string tls = kv_secret.TryGetValue("tls").IsNull() ? "" : kv_secret.TryGetValue("tls").ToString();
 	string ssl = kv_secret.TryGetValue("ssl").IsNull() ? "" : kv_secret.TryGetValue("ssl").ToString();
 	string tlsCAFile = kv_secret.TryGetValue("tlsCAFile").IsNull() ? "" : kv_secret.TryGetValue("tlsCAFile").ToString();
-	string tlsAllowInvalidCertificates =
-	    kv_secret.TryGetValue("tlsAllowInvalidCertificates").IsNull() ? ""
-	                                                                  : kv_secret.TryGetValue("tlsAllowInvalidCertificates")
-	                                                                        .ToString();
+	string tlsAllowInvalidCertificates = kv_secret.TryGetValue("tlsAllowInvalidCertificates").IsNull()
+	                                         ? ""
+	                                         : kv_secret.TryGetValue("tlsAllowInvalidCertificates").ToString();
 
 	// Check if using SRV connection (for MongoDB Atlas)
 	bool use_srv = false;
@@ -91,8 +90,7 @@ string BuildMongoConnectionString(const KeyValueSecret &kv_secret, const string 
 	}
 	if (!tlsAllowInvalidCertificates.empty()) {
 		string tls_allow_invalid_lower = StringUtil::Lower(tlsAllowInvalidCertificates);
-		if (tls_allow_invalid_lower == "true" || tls_allow_invalid_lower == "1" ||
-		    tls_allow_invalid_lower == "yes") {
+		if (tls_allow_invalid_lower == "true" || tls_allow_invalid_lower == "1" || tls_allow_invalid_lower == "yes") {
 			query_params.push_back("tlsAllowInvalidCertificates=true");
 		}
 	}

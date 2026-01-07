@@ -35,19 +35,22 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunctionSet mongo_scan_set("mongo_scan");
 	mongo_scan_set.AddFunction(std::move(mongo_scan));
 	CreateTableFunctionInfo mongo_scan_info(std::move(mongo_scan_set));
-	
+
 	// Set description
 	FunctionDescription mongo_scan_desc;
 	mongo_scan_desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
 	mongo_scan_desc.parameter_names = {"connection_string", "database", "collection"};
-	mongo_scan_desc.description = "Scans a MongoDB collection and returns its contents as a table. Supports optional filter and sample_size parameters.";
+	mongo_scan_desc.description = "Scans a MongoDB collection and returns its contents as a table. Supports optional "
+	                              "filter and sample_size parameters.";
 	mongo_scan_desc.examples.push_back("SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection')");
-	mongo_scan_desc.examples.push_back("SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection', filter := '{\"status\": \"active\"}')");
+	mongo_scan_desc.examples.push_back("SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection', "
+	                                   "filter := '{\"status\": \"active\"}')");
 	mongo_scan_info.descriptions.push_back(std::move(mongo_scan_desc));
-	
+
 	// Set comment
-	mongo_scan_info.comment = Value("Table function to query MongoDB collections directly. Use filter parameter for MongoDB-specific query operators.");
-	
+	mongo_scan_info.comment = Value("Table function to query MongoDB collections directly. Use filter parameter for "
+	                                "MongoDB-specific query operators.");
+
 	// Register the table function
 	loader.RegisterFunction(std::move(mongo_scan_info));
 
@@ -56,16 +59,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunctionSet clear_cache_set("mongo_clear_cache");
 	clear_cache_set.AddFunction(std::move(clear_cache_func));
 	CreateTableFunctionInfo clear_cache_info(std::move(clear_cache_set));
-	
+
 	// Set description
 	FunctionDescription clear_cache_desc;
-	clear_cache_desc.description = "Clears the schema cache for all attached MongoDB databases. Useful when MongoDB schema changes.";
+	clear_cache_desc.description =
+	    "Clears the schema cache for all attached MongoDB databases. Useful when MongoDB schema changes.";
 	clear_cache_desc.examples.push_back("SELECT * FROM mongo_clear_cache()");
 	clear_cache_info.descriptions.push_back(std::move(clear_cache_desc));
-	
+
 	// Set comment
-	clear_cache_info.comment = Value("Invalidates cached schema information for MongoDB collections. Call this after schema changes in MongoDB.");
-	
+	clear_cache_info.comment = Value(
+	    "Invalidates cached schema information for MongoDB collections. Call this after schema changes in MongoDB.");
+
 	// Register the table function
 	loader.RegisterFunction(std::move(clear_cache_info));
 
