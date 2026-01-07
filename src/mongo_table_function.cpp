@@ -330,7 +330,6 @@ LogicalType InferStructTypeFromArray(bsoncxx::array::view array, int depth) {
 			switch (field.type()) {
 			case bsoncxx::type::k_document: {
 				// Nested document - recursively infer STRUCT
-				auto inner_doc = field.get_document().value;
 				// For nested documents in arrays, we'll create nested STRUCT
 				// For now, store as VARCHAR to avoid complexity
 				field_type = LogicalType::VARCHAR;
@@ -474,9 +473,7 @@ int GetBSONArrayDepth(const bsoncxx::array::view &array, int max_depth = 10) {
 	}
 
 	int max_element_depth = 0;
-	int element_count = 0;
 	for (const auto &element : array) {
-		element_count++;
 		if (element.type() == bsoncxx::type::k_array) {
 			auto nested_array = element.get_array().value;
 			int nested_depth = 1 + GetBSONArrayDepth(nested_array, max_depth - 1);
