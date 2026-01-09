@@ -4,6 +4,7 @@
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -802,6 +803,211 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 	}
 }
 
+bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<string> &column_names,
+                                   vector<LogicalType> &column_types,
+                                   unordered_map<string, string> &column_name_to_mongo_path) {
+	// Check for __schema document in the collection (for Atlas SQL customers)
+	bsoncxx::builder::basic::document filter_builder;
+	filter_builder.append(bsoncxx::builder::basic::kvp("_id", "__schema"));
+	auto filter = filter_builder.extract();
+
+	auto schema_doc = collection.find_one(filter.view());
+	if (!schema_doc) {
+		return false;
+	}
+
+	auto doc_view = schema_doc->view();
+	bsoncxx::document::view schema_doc_view;
+	
+	// Check if schema is in a nested "schema" field, or directly in the document
+	auto schema_element = doc_view["schema"];
+	if (schema_element && schema_element.type() == bsoncxx::type::k_document) {
+		// Schema is nested: { "_id": "__schema", "schema": { "field1": "VARCHAR", ... } }
+		schema_doc_view = schema_element.get_document().value;
+	} else {
+		// Schema is directly in the document: { "_id": "__schema", "field1": "VARCHAR", ... }
+		schema_doc_view = doc_view;
+	}
+	
+	// Parse schema document - expected format: { "field1": "VARCHAR", "field2": "BIGINT", ... }
+	// Or could be nested: { "field1": { "type": "VARCHAR", "path": "field1" }, ... }
+	for (auto it = schema_doc_view.begin(); it != schema_doc_view.end(); ++it) {
+		std::string field_name = it->key().to_string();
+		
+		// Skip _id and "schema" fields (metadata, not actual schema fields)
+		if (field_name == "_id" || field_name == "schema") {
+			continue;
+		}
+
+		LogicalType field_type;
+		std::string mongo_path = field_name;
+
+		if (it->type() == bsoncxx::type::k_string) {
+			// Simple format: "field": "VARCHAR"
+			std::string type_str = it->get_string().value.to_string();
+			field_type = TransformStringToLogicalType(type_str);
+		} else if (it->type() == bsoncxx::type::k_document) {
+			// Nested format: "field": { "type": "VARCHAR", "path": "field.path" }
+			auto field_doc = it->get_document().value;
+			auto type_elem = field_doc["type"];
+			if (type_elem && type_elem.type() == bsoncxx::type::k_string) {
+				std::string type_str = type_elem.get_string().value.to_string();
+				field_type = TransformStringToLogicalType(type_str);
+			} else {
+				continue; // Skip invalid entries
+			}
+
+			auto path_elem = field_doc["path"];
+			if (path_elem && path_elem.type() == bsoncxx::type::k_string) {
+				mongo_path = path_elem.get_string().value.to_string();
+			}
+		} else {
+			continue; // Skip invalid entries
+		}
+
+		column_names.push_back(field_name);
+		column_types.push_back(field_type);
+		column_name_to_mongo_path[field_name] = mongo_path;
+	}
+
+	// Always ensure _id is first if we have other columns
+	if (!column_names.empty() && column_names[0] != "_id") {
+		// Check if _id exists, if not add it
+		bool has_id = false;
+		for (size_t i = 0; i < column_names.size(); i++) {
+			if (column_names[i] == "_id") {
+				// Move _id to front
+				std::string id_name = column_names[i];
+				LogicalType id_type = column_types[i];
+				std::string id_path = column_name_to_mongo_path[id_name];
+				
+				column_names.erase(column_names.begin() + i);
+				column_types.erase(column_types.begin() + i);
+				column_name_to_mongo_path.erase(id_name);
+				
+				column_names.insert(column_names.begin(), id_name);
+				column_types.insert(column_types.begin(), id_type);
+				column_name_to_mongo_path[id_name] = id_path;
+				has_id = true;
+				break;
+			}
+		}
+		
+		if (!has_id) {
+			// Add _id at the beginning
+			column_names.insert(column_names.begin(), "_id");
+			column_types.insert(column_types.begin(), LogicalType::VARCHAR);
+			column_name_to_mongo_path["_id"] = "_id";
+		}
+	}
+
+	return !column_names.empty();
+}
+
+void ParseSchemaFromColumnsParameter(ClientContext &context, const Value &columns_value, vector<string> &column_names,
+                                     vector<LogicalType> &column_types,
+                                     unordered_map<string, string> &column_name_to_mongo_path) {
+	auto &child_type = columns_value.type();
+	if (child_type.id() != LogicalTypeId::STRUCT) {
+		throw BinderException("mongo_scan \"columns\" parameter requires a struct as input.");
+	}
+
+	auto &struct_children = StructValue::GetChildren(columns_value);
+	D_ASSERT(StructType::GetChildCount(child_type) == struct_children.size());
+
+	for (idx_t i = 0; i < struct_children.size(); i++) {
+		auto &name = StructType::GetChildName(child_type, i);
+		auto &val = struct_children[i];
+		if (val.IsNull()) {
+			throw BinderException("mongo_scan \"columns\" parameter type specification cannot be NULL.");
+		}
+		
+		LogicalType field_type;
+		std::string mongo_path = name;
+
+		if (val.type().id() == LogicalTypeId::VARCHAR) {
+			// Simple format: column name -> type string
+			field_type = TransformStringToLogicalType(StringValue::Get(val), context);
+		} else if (val.type().id() == LogicalTypeId::STRUCT) {
+			// Nested format: column name -> { "type": "VARCHAR", "path": "field.path" }
+			auto &nested_children = StructValue::GetChildren(val);
+			auto &nested_type = val.type();
+			
+			// Look for "type" field
+			bool found_type = false;
+			for (idx_t j = 0; j < nested_children.size(); j++) {
+				auto &nested_name = StructType::GetChildName(nested_type, j);
+				if (StringUtil::Lower(nested_name) == "type") {
+					auto &type_val = nested_children[j];
+					if (type_val.type().id() == LogicalTypeId::VARCHAR) {
+						field_type = TransformStringToLogicalType(StringValue::Get(type_val), context);
+						found_type = true;
+					}
+					break;
+				}
+			}
+			
+			if (!found_type) {
+				throw BinderException("mongo_scan \"columns\" parameter nested struct must contain a \"type\" field.");
+			}
+
+			// Look for "path" field (optional)
+			for (idx_t j = 0; j < nested_children.size(); j++) {
+				auto &nested_name = StructType::GetChildName(nested_type, j);
+				if (StringUtil::Lower(nested_name) == "path") {
+					auto &path_val = nested_children[j];
+					if (path_val.type().id() == LogicalTypeId::VARCHAR) {
+						mongo_path = StringValue::Get(path_val);
+					}
+					break;
+				}
+			}
+		} else {
+			throw BinderException("mongo_scan \"columns\" parameter type specification must be VARCHAR or STRUCT.");
+		}
+
+		column_names.push_back(name);
+		column_types.push_back(field_type);
+		column_name_to_mongo_path[name] = mongo_path;
+	}
+
+	D_ASSERT(column_names.size() == column_types.size());
+	if (column_names.empty()) {
+		throw BinderException("mongo_scan \"columns\" parameter needs at least one column.");
+	}
+
+	// Always ensure _id is first if we have other columns
+	if (column_names[0] != "_id") {
+		// Check if _id exists, if not add it
+		bool has_id = false;
+		for (size_t i = 0; i < column_names.size(); i++) {
+			if (column_names[i] == "_id") {
+				// Move _id to front
+				std::string id_name = column_names[i];
+				LogicalType id_type = column_types[i];
+				std::string id_path = column_name_to_mongo_path[id_name];
+				
+				column_names.erase(column_names.begin() + i);
+				column_types.erase(column_types.begin() + i);
+				column_name_to_mongo_path.erase(id_name);
+				
+				column_names.insert(column_names.begin(), id_name);
+				column_types.insert(column_types.begin(), id_type);
+				column_name_to_mongo_path[id_name] = id_path;
+				has_id = true;
+				break;
+			}
+		}
+		
+		if (!has_id) {
+			// Add _id at the beginning
+			column_names.insert(column_names.begin(), "_id");
+			column_types.insert(column_types.begin(), LogicalType::VARCHAR);
+			column_name_to_mongo_path["_id"] = "_id";
+		}
+	}
+}
+
 void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_size, vector<string> &column_names,
                               vector<LogicalType> &column_types,
                               unordered_map<string, string> &column_name_to_mongo_path) {
@@ -1279,9 +1485,30 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 	auto db = result->connection->client[result->database_name];
 	auto collection = db[result->collection_name];
 
-	// Infer schema
-	InferSchemaFromDocuments(collection, result->sample_size, result->column_names, result->column_types,
-	                         result->column_name_to_mongo_path);
+	// Schema resolution priority:
+	// 1. User-provided columns parameter (highest priority)
+	// 2. __schema document in collection (for Atlas SQL customers)
+	// 3. Infer from documents (fallback)
+	bool schema_set = false;
+
+	// Check for user-provided columns parameter
+	if (input.named_parameters.find("columns") != input.named_parameters.end()) {
+		ParseSchemaFromColumnsParameter(context, input.named_parameters["columns"], result->column_names,
+		                                result->column_types, result->column_name_to_mongo_path);
+		schema_set = true;
+	}
+
+	// If no user-provided schema, check for __schema document (Atlas SQL)
+	if (!schema_set) {
+		schema_set = ParseSchemaFromAtlasDocument(collection, result->column_names, result->column_types,
+		                                          result->column_name_to_mongo_path);
+	}
+
+	// If still no schema, infer from documents
+	if (!schema_set) {
+		InferSchemaFromDocuments(collection, result->sample_size, result->column_names, result->column_types,
+		                         result->column_name_to_mongo_path);
+	}
 
 	// Set return types and names
 	return_types = result->column_types;
@@ -1993,6 +2220,7 @@ void RegisterMongoTableFunction(DatabaseInstance &db) {
 	// Add optional parameters
 	mongo_scan.named_parameters["filter"] = LogicalType::VARCHAR;
 	mongo_scan.named_parameters["sample_size"] = LogicalType::BIGINT;
+	mongo_scan.named_parameters["columns"] = LogicalType::ANY;
 
 	// Register the table function using ExtensionLoader
 	// Note: This should be called from ExtensionLoader::Load, not directly
