@@ -1906,30 +1906,9 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	}
 
 	// Create cursor with query filter and options (including projection if set)
-	std::cerr << "[MONGO DEBUG] Creating MongoDB cursor\n";
-	std::cerr << "[MONGO DEBUG]   Database: " << data.database_name << ", Collection: " << data.collection_name << "\n";
-	std::cerr << "[MONGO DEBUG]   Query filter: " << bsoncxx::to_json(query_filter.view()) << "\n";
-
-	// Check if limit is set
-	if (opts.limit()) {
-		std::cerr << "[MONGO DEBUG]   Limit set: " << opts.limit().value() << "\n";
-	} else {
-		std::cerr << "[MONGO DEBUG]   No limit set\n";
-	}
-
-	// Check if projection is set
-	if (opts.projection()) {
-		std::cerr << "[MONGO DEBUG]   Projection set: " << bsoncxx::to_json(opts.projection().value()) << "\n";
-	} else {
-		std::cerr << "[MONGO DEBUG]   No projection set\n";
-	}
-
 	result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter, opts));
 	result->current = make_uniq<mongocxx::cursor::iterator>(result->cursor->begin());
 	result->end = make_uniq<mongocxx::cursor::iterator>(result->cursor->end());
-
-	std::cerr << "[MONGO DEBUG] Cursor created\n";
-	std::cerr << "[MONGO DEBUG]   Cursor has documents? " << (*result->current != *result->end ? "yes" : "no") << "\n";
 
 	return std::move(result);
 }
