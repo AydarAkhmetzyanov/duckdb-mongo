@@ -860,19 +860,19 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		std::vector<std::string> segments;
 		std::istringstream iss(mongo_path);
 		std::string segment;
-		
+
 		// Split by dots
 		while (std::getline(iss, segment, '.')) {
 			segments.push_back(segment);
 		}
-		
+
 		if (segments.empty()) {
 			return bsoncxx::document::element {};
 		}
-		
+
 		bsoncxx::document::view current = doc;
 		bsoncxx::document::element result;
-		
+
 		// Navigate through segments
 		for (size_t i = 0; i < segments.size(); i++) {
 			const std::string &seg = segments[i];
@@ -881,7 +881,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return bsoncxx::document::element {};
 			}
 			result = element;
-			
+
 			// If this is not the last segment, it must be a document
 			if (i < segments.size() - 1) {
 				if (result.type() != bsoncxx::type::k_document) {
@@ -894,7 +894,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return result;
 			}
 		}
-		
+
 		// Should never reach here, but return result if we do
 		return result;
 	};
@@ -905,19 +905,19 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		std::vector<std::string> segments;
 		std::istringstream iss(path);
 		std::string segment;
-		
+
 		// First, collect all segments
 		while (std::getline(iss, segment, '_')) {
 			segments.push_back(segment);
 		}
-		
+
 		if (segments.empty()) {
 			return bsoncxx::document::element {};
 		}
-		
+
 		bsoncxx::document::view current = doc;
 		bsoncxx::document::element result;
-		
+
 		// Navigate through segments
 		for (size_t i = 0; i < segments.size(); i++) {
 			const std::string &seg = segments[i];
@@ -926,7 +926,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return bsoncxx::document::element {};
 			}
 			result = element;
-			
+
 			// If this is not the last segment, it must be a document
 			if (i < segments.size() - 1) {
 				if (result.type() != bsoncxx::type::k_document) {
@@ -939,7 +939,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return result;
 			}
 		}
-		
+
 		// Should never reach here, but return result if we do
 		return result;
 	};
@@ -948,19 +948,19 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		std::vector<std::string> segments;
 		std::istringstream iss(mongo_path);
 		std::string segment;
-		
+
 		// Split by dots (MongoDB path notation)
 		while (std::getline(iss, segment, '.')) {
 			segments.push_back(segment);
 		}
-		
+
 		if (segments.empty()) {
 			return bsoncxx::array::view {};
 		}
-		
+
 		bsoncxx::document::view current = doc;
 		bsoncxx::document::element result;
-		
+
 		// Navigate through segments
 		for (size_t i = 0; i < segments.size(); i++) {
 			const std::string &seg = segments[i];
@@ -969,7 +969,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return bsoncxx::array::view {};
 			}
 			result = element;
-			
+
 			// If this is not the last segment, it must be a document
 			if (i < segments.size() - 1) {
 				if (result.type() != bsoncxx::type::k_document) {
@@ -984,7 +984,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 				return bsoncxx::array::view {};
 			}
 		}
-		
+
 		return bsoncxx::array::view {};
 	};
 
