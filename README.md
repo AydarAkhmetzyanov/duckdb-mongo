@@ -465,7 +465,7 @@ The extension automatically infers schemas by sampling documents (default: 100, 
 
 ### Architecture
 
-The extension provides **direct SQL access to MongoDB without exporting or copying data**. All queries execute against live MongoDB data in real-time.
+The extension enables **in-process analytical SQL queries** over MongoDB data using DuckDB's embedded analytical engine. Queries execute against live MongoDB data in real-time, with analytical operations (joins, aggregations, window functions) performed locally in memory.
 
 ```
 ┌──────────────────┐
@@ -497,7 +497,6 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
          ▼
 ┌─────────────────────────────────────────┐
 │ duckdb-mongo Extension                  │
-│                                         │
 │  • Schema Inference                     │
 │  • Filter Translation                   │
 │  • Projection Optimization              │
@@ -517,7 +516,6 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
 │  │ - Cursor management               │  │
 │  │ - Document retrieval              │  │
 │  └───────────────────────────────────┘  │
-│                                         │
 │  Data stays here (No ETL/Export)        │
 └─────────────────────────────────────────┘
 ```
@@ -591,7 +589,7 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
 
 ### Pushdown Strategy
 
-The extension uses a selective pushdown strategy: **filter at MongoDB** (reduce data transfer), **analyze in DuckDB** (powerful SQL).
+The extension uses a selective pushdown strategy: **filter at MongoDB** (reduce data transfer), **analyze in DuckDB** (analytical operations).
 
 **Pushed Down to MongoDB:**
 - WHERE clauses (automatic conversion to MongoDB `$match` queries)
