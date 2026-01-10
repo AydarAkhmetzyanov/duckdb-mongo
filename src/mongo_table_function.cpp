@@ -804,8 +804,8 @@ void CollectFieldPaths(const bsoncxx::document::view &doc, const std::string &pr
 }
 
 bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<string> &column_names,
-                                   vector<LogicalType> &column_types,
-                                   unordered_map<string, string> &column_name_to_mongo_path) {
+                                  vector<LogicalType> &column_types,
+                                  unordered_map<string, string> &column_name_to_mongo_path) {
 	// Check for __schema document in the collection (for Atlas SQL users)
 	bsoncxx::builder::basic::document filter_builder;
 	filter_builder.append(bsoncxx::builder::basic::kvp("_id", "__schema"));
@@ -818,7 +818,7 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 
 	auto doc_view = schema_doc->view();
 	bsoncxx::document::view schema_doc_view;
-	
+
 	// Check if schema is in a nested "schema" field, or directly in the document
 	auto schema_element = doc_view["schema"];
 	if (schema_element && schema_element.type() == bsoncxx::type::k_document) {
@@ -828,12 +828,12 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 		// Schema is directly in the document: { "_id": "__schema", "field1": "VARCHAR", ... }
 		schema_doc_view = doc_view;
 	}
-	
+
 	// Parse schema document - expected format: { "field1": "VARCHAR", "field2": "BIGINT", ... }
 	// Or could be nested: { "field1": { "type": "VARCHAR", "path": "field1" }, ... }
 	for (auto it = schema_doc_view.begin(); it != schema_doc_view.end(); ++it) {
 		std::string field_name = std::string(it->key().data(), it->key().length());
-		
+
 		// Skip _id and "schema" fields (metadata, not actual schema fields)
 		if (field_name == "_id" || field_name == "schema") {
 			continue;
@@ -878,7 +878,7 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 			break;
 		}
 	}
-	
+
 	if (!has_id) {
 		column_names.push_back("_id");
 		column_types.push_back(LogicalType::VARCHAR);
@@ -905,7 +905,7 @@ void ParseSchemaFromColumnsParameter(ClientContext &context, const Value &column
 		if (val.IsNull()) {
 			throw BinderException("mongo_scan \"columns\" parameter type specification cannot be NULL.");
 		}
-		
+
 		LogicalType field_type;
 		std::string mongo_path = name;
 
@@ -916,7 +916,7 @@ void ParseSchemaFromColumnsParameter(ClientContext &context, const Value &column
 			// Nested format: column name -> { "type": "VARCHAR", "path": "field.path" }
 			auto &nested_children = StructValue::GetChildren(val);
 			auto &nested_type = val.type();
-			
+
 			// Look for "type" field
 			bool found_type = false;
 			for (idx_t j = 0; j < nested_children.size(); j++) {
@@ -930,7 +930,7 @@ void ParseSchemaFromColumnsParameter(ClientContext &context, const Value &column
 					break;
 				}
 			}
-			
+
 			if (!found_type) {
 				throw BinderException("mongo_scan \"columns\" parameter nested struct must contain a \"type\" field.");
 			}
@@ -969,7 +969,7 @@ void ParseSchemaFromColumnsParameter(ClientContext &context, const Value &column
 			break;
 		}
 	}
-	
+
 	if (!has_id) {
 		column_names.push_back("_id");
 		column_types.push_back(LogicalType::VARCHAR);
@@ -1293,7 +1293,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		}
 
 		bsoncxx::document::element element;
-		
+
 		// Check if this is a nested path (contains dots)
 		if (mongo_field_name.find('.') != std::string::npos) {
 			// Use MongoDB path-based lookup for nested fields
@@ -2131,7 +2131,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	// This is critical: output.data columns must match the order DuckDB expects
 	// input.column_ids contains the column indices in the order DuckDB wants them
 	unordered_set<idx_t> needed_set(needed_column_indices.begin(), needed_column_indices.end());
-	
+
 	// First, add columns in the order DuckDB requested them (from input.column_ids)
 	// This preserves the SELECT clause order
 	for (column_t col_id : input.column_ids) {
@@ -2154,7 +2154,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 			}
 		}
 	}
-	
+
 	// Also add any filter columns that weren't in input.column_ids (if filters weren't pushed down)
 	if (input.filters && !input.filters->filters.empty() && !input.column_ids.empty() && !filters_pushed_down) {
 		unordered_map<idx_t, idx_t> filter_index_map;
