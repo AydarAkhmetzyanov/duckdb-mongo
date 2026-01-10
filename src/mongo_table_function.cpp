@@ -1685,10 +1685,8 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 bsoncxx::document::value BuildMongoProjection(const vector<column_t> &column_ids,
                                               const vector<string> &all_column_names,
                                               const unordered_map<string, string> &column_name_to_mongo_path) {
-	bsoncxx::builder::basic::document projection_builder;
-
-	// Use a set to track which fields we've already added (avoid duplicates)
-	unordered_set<string> added_fields;
+	// Collect all MongoDB paths for requested columns
+	vector<string> mongo_paths;
 	bool has_id = false;
 
 	for (column_t col_id : column_ids) {
@@ -1713,49 +1711,72 @@ bsoncxx::document::value BuildMongoProjection(const vector<column_t> &column_ids
 			mongo_path = column_name;
 		}
 
-		// Skip if we've already added this field
-		if (added_fields.find(mongo_path) != added_fields.end()) {
-			continue;
-		}
-
-		// Check for path collisions: if we're adding a nested field (e.g., "address.zip"),
-		// we cannot also have the parent field ("address") in the projection
-		// MongoDB will automatically include parent documents when projecting nested fields
-		size_t dot_pos = mongo_path.find('.');
-		if (dot_pos != string::npos) {
-			string parent_path = mongo_path.substr(0, dot_pos);
-			// If parent path was already added, skip to avoid collision
-			if (added_fields.find(parent_path) != added_fields.end()) {
-				continue;
-			}
-		} else {
-			// If we're adding a parent field, check if any nested children are already added
-			// If so, skip the parent to avoid collision
-			bool has_nested_child = false;
-			for (const auto &added : added_fields) {
-				if (added.find(mongo_path + ".") == 0) {
-					has_nested_child = true;
-					break;
-				}
-			}
-			if (has_nested_child) {
-				continue; // Skip parent if nested child exists
-			}
-		}
-
 		// Track if _id is included
 		if (mongo_path == "_id") {
 			has_id = true;
 		}
 
-		// Add field to projection (1 means include)
-		projection_builder.append(bsoncxx::builder::basic::kvp(mongo_path, 1));
-		added_fields.insert(mongo_path);
+		mongo_paths.push_back(mongo_path);
 	}
 
-	// If we have no real fields, return empty document (no projection = return all fields)
-	if (added_fields.empty()) {
+	// Sort paths to enable efficient prefix collapsing
+	// Sort lexicographically so parent paths come before nested paths
+	// (e.g., "address" comes before "address.zip")
+	// This makes prefix detection straightforward: if path A is a prefix of path B,
+	// then A will appear before B in sorted order
+	sort(mongo_paths.begin(), mongo_paths.end());
+
+	// Collapse paths with common prefixes
+	// If we have both a parent path and nested children, keep only the parent
+	// (MongoDB will include parent documents when projecting nested fields)
+	// Example: ["address", "address.zip", "address.city"] -> ["address"]
+	// Example: ["address.zip", "address.city"] -> ["address.zip", "address.city"]
+	vector<string> collapsed_paths;
+	for (const string &path : mongo_paths) {
+		// Check if this path is nested under any existing path
+		// Since paths are sorted, we only need to check the last few paths
+		bool is_nested = false;
+		for (auto it = collapsed_paths.rbegin(); it != collapsed_paths.rend(); ++it) {
+			if (path.find(*it + ".") == 0) {
+				// Current path is nested under existing path, skip it
+				is_nested = true;
+				break;
+			}
+			// Since paths are sorted, if current path doesn't start with this existing path,
+			// it won't start with any earlier paths either
+			if (*it < path) {
+				break;
+			}
+		}
+
+		if (!is_nested) {
+			// Remove any existing paths that are nested under current path
+			// Since paths are sorted, these would be at the end
+			while (!collapsed_paths.empty()) {
+				const string &last = collapsed_paths.back();
+				if (last.find(path + ".") == 0) {
+					collapsed_paths.pop_back();
+				} else {
+					break;
+				}
+			}
+			collapsed_paths.push_back(path);
+		}
+	}
+
+	// Build projection document from collapsed paths
+	bsoncxx::builder::basic::document projection_builder;
+
+	if (collapsed_paths.empty()) {
+		// If we have no real fields, return empty document (no projection = return all fields)
 		return bsoncxx::builder::basic::document {}.extract();
+	}
+
+	// Add all collapsed paths to projection (sorted for consistent output)
+	vector<string> sorted_paths(collapsed_paths.begin(), collapsed_paths.end());
+	sort(sorted_paths.begin(), sorted_paths.end());
+	for (const string &path : sorted_paths) {
+		projection_builder.append(bsoncxx::builder::basic::kvp(path, 1));
 	}
 
 	// Include _id if it wasn't already included (MongoDB typically includes _id by default)
