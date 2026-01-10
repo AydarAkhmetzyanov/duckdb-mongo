@@ -1821,7 +1821,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 			// Convert DuckDB filters to MongoDB query using remapped indices
 			auto mongo_filter = ConvertFiltersToMongoQuery(remapped_filters.get(), data.column_names, data.column_types,
 			                                               data.column_name_to_mongo_path);
-			
+
 			// Check if filters were successfully pushed down (non-empty MongoDB query)
 			// If filters are pushed down to MongoDB, MongoDB filters server-side and we don't need filter columns
 			auto filter_view = mongo_filter.view();
@@ -1833,7 +1833,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 			// Filters were pushed down if we have a non-empty filter document
 			// (empty document means conversion failed or filters couldn't be converted)
 			filters_pushed_down = (filter_field_count > 0);
-			
+
 			query_filter = std::move(mongo_filter);
 		} else {
 			// No filters could be remapped, so they can't be pushed down
