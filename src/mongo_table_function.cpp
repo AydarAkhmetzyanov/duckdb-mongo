@@ -1905,6 +1905,21 @@ bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>
 	return query_builder.extract();
 }
 
+// Helper function to unwrap CAST expressions and get the underlying column reference
+static const BoundColumnRefExpression* UnwrapCastToColumnRef(const Expression &expr) {
+	const Expression *current = &expr;
+	// Unwrap CAST expressions recursively
+	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast_expr = current->Cast<BoundCastExpression>();
+		current = cast_expr.child.get();
+	}
+	// Check if we have a column reference
+	if (current->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		return &current->Cast<BoundColumnRefExpression>();
+	}
+	return nullptr;
+}
+
 // Helper function to convert a column reference to MongoDB field path
 static string GetMongoPathForColumn(const BoundColumnRefExpression &col_ref,
                                      const vector<string> &column_names,
@@ -1919,6 +1934,17 @@ static string GetMongoPathForColumn(const BoundColumnRefExpression &col_ref,
 		return "$" + path_it->second;
 	}
 	return "$" + column_name;
+}
+
+// Helper function to get MongoDB path from an expression (handles CAST-wrapped columns)
+static string GetMongoPathFromExpression(const Expression &expr,
+                                         const vector<string> &column_names,
+                                         const unordered_map<string, string> &column_name_to_mongo_path) {
+	const BoundColumnRefExpression *col_ref = UnwrapCastToColumnRef(expr);
+	if (col_ref) {
+		return GetMongoPathForColumn(*col_ref, column_names, column_name_to_mongo_path);
+	}
+	return "";
 }
 
 // Helper function to append a constant value to a BSON array
@@ -2011,8 +2037,15 @@ static bool ValidateFunctionSignature(const BoundFunctionExpression &func_expr,
 	}
 	
 	// Check if date/timestamp type is required
+	// For date functions, we need to check the underlying type (unwrap CAST if present)
 	if (mapping.requires_date_type && mapping.arg_count > 0) {
-		auto first_arg_type = func_expr.children[0]->return_type.id();
+		const Expression *first_arg = func_expr.children[0].get();
+		// Unwrap CAST expressions to get to the underlying column type
+		while (first_arg->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			auto &cast_expr = first_arg->Cast<BoundCastExpression>();
+			first_arg = cast_expr.child.get();
+		}
+		auto first_arg_type = first_arg->return_type.id();
 		if (first_arg_type != LogicalTypeId::DATE &&
 		    first_arg_type != LogicalTypeId::TIMESTAMP &&
 		    first_arg_type != LogicalTypeId::TIMESTAMP_TZ) {
@@ -2041,17 +2074,19 @@ static bool ConvertFunctionToMongoExpr(const BoundFunctionExpression &func_expr,
 		return false;
 	}
 	
-	// All supported functions currently require a single column reference argument
+	// All supported functions currently require a single column reference argument (may be CAST-wrapped)
 	if (func_expr.children.size() != 1) {
 		return false;
 	}
 	auto &child = func_expr.children[0];
-	if (child->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+	
+	// Unwrap CAST expressions to get to the underlying column reference
+	const BoundColumnRefExpression *col_ref = UnwrapCastToColumnRef(*child);
+	if (!col_ref) {
 		return false;
 	}
 	
-	auto &col_ref = child->Cast<BoundColumnRefExpression>();
-	string mongo_path = GetMongoPathForColumn(col_ref, column_names, column_name_to_mongo_path);
+	string mongo_path = GetMongoPathForColumn(*col_ref, column_names, column_name_to_mongo_path);
 	if (mongo_path.empty()) {
 		return false;
 	}
@@ -2082,11 +2117,27 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 	case ExpressionClass::BOUND_COMPARISON: {
 		auto &comp_expr = expr.Cast<BoundComparisonExpression>();
 		
-		bool left_is_column = comp_expr.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
-		bool right_is_constant = comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
-		bool right_is_column = comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
-		bool left_is_function = comp_expr.left->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
-		bool right_is_function = comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
+		// Unwrap CAST expressions on both sides to get to underlying expressions
+		const Expression *left_expr = comp_expr.left.get();
+		const Expression *right_expr = comp_expr.right.get();
+		
+		// Unwrap CAST on left side
+		while (left_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			auto &cast_expr = left_expr->Cast<BoundCastExpression>();
+			left_expr = cast_expr.child.get();
+		}
+		
+		// Unwrap CAST on right side
+		while (right_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			auto &cast_expr = right_expr->Cast<BoundCastExpression>();
+			right_expr = cast_expr.child.get();
+		}
+		
+		bool left_is_column = left_expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+		bool right_is_constant = right_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+		bool right_is_column = right_expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+		bool left_is_function = left_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
+		bool right_is_function = right_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
 		
 		// Skip simple column-to-constant comparisons (e.g., age > 25)
 		// These should be handled by TableFilter conversion, which produces faster MongoDB native queries
@@ -2122,20 +2173,16 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 			return false;
 		}
 
-		// Convert left and right sides to MongoDB expressions
+		// Convert left and right sides to MongoDB expressions (using unwrapped expressions)
 		bsoncxx::builder::basic::array args_array;
 		bsoncxx::builder::basic::document left_expr_doc;
 
-		// Convert left side
-		if (comp_expr.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-			auto &left_col = comp_expr.left->Cast<BoundColumnRefExpression>();
-			string left_path = GetMongoPathForColumn(left_col, column_names, column_name_to_mongo_path);
-			if (left_path.empty()) {
-				return false;
-			}
+		// Convert left side (using unwrapped expression)
+		string left_path = GetMongoPathFromExpression(*left_expr, column_names, column_name_to_mongo_path);
+		if (!left_path.empty()) {
 			args_array.append(left_path);
-		} else if (comp_expr.left->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			auto &left_func = comp_expr.left->Cast<BoundFunctionExpression>();
+		} else if (left_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			auto &left_func = left_expr->Cast<BoundFunctionExpression>();
 			if (!ConvertFunctionToMongoExpr(left_func, column_names, column_name_to_mongo_path, left_expr_doc)) {
 				return false;
 			}
@@ -2144,26 +2191,25 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 			return false;
 		}
 
-		// Convert right side
-		if (comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			auto &right_const = comp_expr.right->Cast<BoundConstantExpression>();
+		// Convert right side (using unwrapped expression)
+		if (right_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			auto &right_const = right_expr->Cast<BoundConstantExpression>();
 			AppendConstantToBSONArray(right_const, args_array);
-		} else if (comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-			auto &right_col = comp_expr.right->Cast<BoundColumnRefExpression>();
-			string right_path = GetMongoPathForColumn(right_col, column_names, column_name_to_mongo_path);
-			if (right_path.empty()) {
-				return false;
-			}
-			args_array.append(right_path);
-		} else if (comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			bsoncxx::builder::basic::document right_expr_doc;
-			auto &right_func = comp_expr.right->Cast<BoundFunctionExpression>();
-			if (!ConvertFunctionToMongoExpr(right_func, column_names, column_name_to_mongo_path, right_expr_doc)) {
-				return false;
-			}
-			args_array.append(right_expr_doc.extract());
 		} else {
-			return false;
+			// Try to get MongoDB path (handles CAST-wrapped column references)
+			string right_path = GetMongoPathFromExpression(*right_expr, column_names, column_name_to_mongo_path);
+			if (!right_path.empty()) {
+				args_array.append(right_path);
+			} else if (right_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+				bsoncxx::builder::basic::document right_expr_doc;
+				auto &right_func = right_expr->Cast<BoundFunctionExpression>();
+				if (!ConvertFunctionToMongoExpr(right_func, column_names, column_name_to_mongo_path, right_expr_doc)) {
+					return false;
+				}
+				args_array.append(right_expr_doc.extract());
+			} else {
+				return false;
+			}
 		}
 
 		// Build comparison expression: { $mongo_op: [left_expr, right_expr] }
