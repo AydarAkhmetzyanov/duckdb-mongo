@@ -215,6 +215,7 @@ SELECT * FROM mongo_scan(
     'users',
     columns := 'invalid'
 );
+----
 
 # Test error: columns parameter cannot have NULL type
 statement error
@@ -224,6 +225,7 @@ SELECT * FROM mongo_scan(
     'users',
     columns := {'_id': NULL}
 );
+----
 
 # Test error: columns parameter needs at least one column
 statement error
@@ -233,6 +235,7 @@ SELECT * FROM mongo_scan(
     'users',
     columns := {}
 );
+----
 
 statement ok
 DETACH mongo_test;

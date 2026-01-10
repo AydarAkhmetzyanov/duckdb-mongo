@@ -40,12 +40,13 @@ ATTACH 'host=localhost port=27017 database=duckdb_mongo_test' AS test_mongo (TYP
 
 # Query collections initially - this populates the collection cache
 # Count only tables in the specific schema to avoid dependencies on other attached databases
+# Note: Includes schema_test_simple, schema_test_nested, schema_test_paths collections added for schema tests
 query I
 SELECT COUNT(*) FROM information_schema.tables 
 WHERE table_catalog = 'test_mongo' 
   AND table_schema = 'duckdb_mongo_test';
 ----
-9
+12
 
 # Query collections again - should use cached data
 query I
@@ -53,7 +54,7 @@ SELECT COUNT(*) FROM information_schema.tables
 WHERE table_catalog = 'test_mongo' 
   AND table_schema = 'duckdb_mongo_test';
 ----
-9
+12
 
 # Get list of collections (this uses cached collection names)
 query T
@@ -69,6 +70,9 @@ nested_scalars_test
 object_container_test
 orders
 products
+schema_test_nested
+schema_test_paths
+schema_test_simple
 type_conflicts
 users
 
@@ -86,7 +90,7 @@ SELECT COUNT(*) FROM information_schema.tables
 WHERE table_catalog = 'test_mongo' 
   AND table_schema = 'duckdb_mongo_test';
 ----
-9
+12
 
 # Verify we get the same collections (proving fresh data was fetched, not stale cache)
 query T
@@ -102,6 +106,9 @@ nested_scalars_test
 object_container_test
 orders
 products
+schema_test_nested
+schema_test_paths
+schema_test_simple
 type_conflicts
 users
 
