@@ -832,7 +832,7 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 	// Parse schema document - expected format: { "field1": "VARCHAR", "field2": "BIGINT", ... }
 	// Or could be nested: { "field1": { "type": "VARCHAR", "path": "field1" }, ... }
 	for (auto it = schema_doc_view.begin(); it != schema_doc_view.end(); ++it) {
-		std::string field_name = it->key().to_string();
+		std::string field_name = std::string(it->key().data(), it->key().length());
 		
 		// Skip _id and "schema" fields (metadata, not actual schema fields)
 		if (field_name == "_id" || field_name == "schema") {
@@ -844,14 +844,14 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 
 		if (it->type() == bsoncxx::type::k_string) {
 			// Simple format: "field": "VARCHAR"
-			std::string type_str = it->get_string().value.to_string();
+			std::string type_str(it->get_string().value.data(), it->get_string().value.length());
 			field_type = TransformStringToLogicalType(type_str);
 		} else if (it->type() == bsoncxx::type::k_document) {
 			// Nested format: "field": { "type": "VARCHAR", "path": "field.path" }
 			auto field_doc = it->get_document().value;
 			auto type_elem = field_doc["type"];
 			if (type_elem && type_elem.type() == bsoncxx::type::k_string) {
-				std::string type_str = type_elem.get_string().value.to_string();
+				std::string type_str(type_elem.get_string().value.data(), type_elem.get_string().value.length());
 				field_type = TransformStringToLogicalType(type_str);
 			} else {
 				continue; // Skip invalid entries
@@ -859,7 +859,7 @@ bool ParseSchemaFromAtlasDocument(mongocxx::collection &collection, vector<strin
 
 			auto path_elem = field_doc["path"];
 			if (path_elem && path_elem.type() == bsoncxx::type::k_string) {
-				mongo_path = path_elem.get_string().value.to_string();
+				mongo_path = std::string(path_elem.get_string().value.data(), path_elem.get_string().value.length());
 			}
 		} else {
 			continue; // Skip invalid entries
@@ -1316,14 +1316,33 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 			continue;
 		}
 
-		auto element = doc[column_name];
+		// Get MongoDB path for this column
+		std::string mongo_field_name = column_name;
+		auto path_it = column_name_to_mongo_path.find(column_name);
+		if (path_it != column_name_to_mongo_path.end()) {
+			mongo_field_name = path_it->second;
+		}
 
-		if (!element) {
-			// Try MongoDB path-based lookup for nested fields
-			auto path_it = column_name_to_mongo_path.find(column_name);
-			if (path_it != column_name_to_mongo_path.end()) {
-				element = getElementByMongoPath(path_it->second);
-			} else {
+		bsoncxx::document::element element;
+		
+		// Check if this is a nested path (contains dots)
+		if (mongo_field_name.find('.') != std::string::npos) {
+			// Use MongoDB path-based lookup for nested fields
+			element = getElementByMongoPath(mongo_field_name);
+		} else {
+			// Direct field access - iterate to find exact match by name
+			// This ensures we get the correct field even if doc[string] has issues
+			bool found = false;
+			for (auto it = doc.begin(); it != doc.end(); ++it) {
+				std::string field_key(it->key().data(), it->key().length());
+				if (field_key == mongo_field_name) {
+					element = *it;
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				// Fallback to underscore-based path splitting
 				element = getElementByPath(column_name);
 			}
 		}
