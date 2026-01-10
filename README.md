@@ -42,6 +42,8 @@ SELECT * FROM atlas_db.mydb.mycollection;
 - Nested document flattening with underscore-separated names
 - BSON type mapping to DuckDB SQL types
 - **Filter pushdown**: WHERE clauses pushed to MongoDB to leverage indexes
+- **Projection pushdown**: Only fetches columns used in SELECT clause
+- **Filter prune**: Excludes filter columns from projections when filters are pushed down
 - Optional MongoDB query filters
 - Read-only (write support may be added)
 
@@ -478,6 +480,8 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
 │  │ SQL Planning & Optimization       │  │
 │  │ - Query planning                  │  │
 │  │ - Filter pushdown analysis        │  │
+│  │ - Projection pushdown analysis    │  │
+│  │ - Filter prune optimization       │  │
 │  └───────────────────────────────────┘  │
 │  ┌───────────────────────────────────┐  │
 │  │ SQL Execution (Analytical)        │  │
@@ -496,6 +500,7 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
 │                                         │
 │  • Schema Inference                     │
 │  • Filter Translation                   │
+│  • Projection Optimization              │
 │  • BSON → Columnar                      │
 │  • Type Conversion                      │
 └────────┬────────────────────────────────┘
@@ -547,9 +552,15 @@ The extension provides **direct SQL access to MongoDB without exporting or copyi
    │   • Convert to MongoDB operators ($eq, $gt, $gte, etc.)    │
    │   • Merge multiple filters on same column                  │
    │                                                            │
+   │ Build MongoDB projection:                                  │
+   │   • Identify columns needed (SELECT + non-pushed filters)  │
+   │   • Apply filter prune (exclude filter-only columns)       │
+   │   • Convert column paths to MongoDB dot notation           │
+   │                                                            │
    │ Create MongoDB cursor:                                     │
-   │   • Execute find() with $match filter                      │
+   │   • Execute find() with $match filter and projection       │
    │   • MongoDB applies filters using indexes                  │
+   │   • MongoDB returns only projected fields                  │
    │   • Returns cursor iterator                                │
    └────────────────────────────────────────────────────────────┘
                               │
@@ -584,6 +595,7 @@ The extension uses a selective pushdown strategy: **filter at MongoDB** (reduce 
 
 **Pushed Down to MongoDB:**
 - WHERE clauses (automatic conversion to MongoDB `$match` queries)
+- Column projections (only columns used in SELECT are fetched)
 - LIMIT clauses (when directly above table scan)
 - Manual `filter` parameter (for MongoDB-specific operators like `$elemMatch`)
 
@@ -596,10 +608,10 @@ WHERE clauses are automatically converted to MongoDB `$match` queries. Use `EXPL
 
 ```sql
 -- Filter pushed down to MongoDB
-EXPLAIN SELECT * FROM mongo_test.duckdb_mongo_test.orders WHERE status = 'completed';
+EXPLAIN SELECT order_id, status FROM mongo_test.duckdb_mongo_test.orders WHERE status = 'completed';
 ```
 
-The plan shows filters in `MONGO_SCAN`, indicating pushdown:
+The plan shows filters and projections in `MONGO_SCAN`, indicating pushdown:
 
 ```
 ┌─────────────────────────────┐
@@ -608,9 +620,21 @@ The plan shows filters in `MONGO_SCAN`, indicating pushdown:
 │└───────────────────────────┘│
 └─────────────────────────────┘
 ┌───────────────────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│          order_id         │
+│           status          │
+│                           │
+│           ~1 row          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
 │        MONGO_SCAN         │
 │    ────────────────────   │
 │    Function: MONGO_SCAN   │
+│                           │
+│        Projections:       │
+│           status          │
+│          order_id         │  ← Only SELECT columns fetched
 │                           │
 │          Filters:         │
 │     status='completed'    │  ← Pushed to MongoDB
@@ -666,7 +690,52 @@ SELECT * FROM mongo_test.duckdb_mongo_test.orders LIMIT 10;
 
 #### Projection Pushdown
 
-Not yet implemented. All columns are currently fetched from MongoDB.
+Projection pushdown automatically fetches only the columns used in the SELECT clause, reducing data transfer and serialization overhead.
+
+**How it works:**
+- DuckDB analyzes the query to identify which columns are needed
+- Only those columns are included in the MongoDB projection
+- Reduces network transfer and BSON parsing overhead
+
+**Example:**
+```sql
+-- Only fetches order_id, status, and total (not items or other columns)
+SELECT order_id, status, total FROM mongo_test.duckdb_mongo_test.orders WHERE status = 'completed';
+-- MongoDB projection: {order_id: 1, status: 1, total: 1, _id: 1}
+```
+
+Use `EXPLAIN` to see which columns are projected:
+```sql
+EXPLAIN SELECT order_id, status FROM mongo_test.duckdb_mongo_test.orders;
+```
+
+The plan shows `Projections: order_id, status` in the `MONGO_SCAN` operator.
+
+#### Filter Prune Optimization
+
+Filter prune works together with projection pushdown to further reduce data transfer by excluding filter columns that are not used in the SELECT clause when filters are pushed down to MongoDB.
+
+**How it works:**
+- Filters are pushed down to MongoDB (server-side filtering)
+- Filter columns not in the SELECT clause are excluded from the projection
+- Only columns needed for query results are fetched
+
+**Example:**
+```sql
+-- Filters on status and total, but only selects order_id
+SELECT order_id 
+FROM mongo_test.duckdb_mongo_test.orders 
+WHERE status = 'completed' AND total > 500;
+-- MongoDB: Filters pushed down, but only order_id is fetched
+-- status and total are NOT fetched (filtered server-side)
+```
+
+Use `EXPLAIN` to verify filter prune is working. The plan shows filters that are pushed down but not included in projections:
+```sql
+EXPLAIN SELECT order_id FROM mongo_test.duckdb_mongo_test.orders WHERE status = 'completed' AND total > 500;
+```
+
+The plan shows `Projections: order_id` and `Filters: status='completed' AND total>500.0` in the `MONGO_SCAN` operator, indicating filters are pushed down but filter columns are not fetched.
 
 ## Contributing
 
