@@ -40,7 +40,6 @@ ATTACH 'host=localhost port=27017 database=duckdb_mongo_test' AS test_mongo (TYP
 
 # Query collections initially - this populates the collection cache
 # Count only tables in the specific schema to avoid dependencies on other attached databases
-# Note: Includes schema_test_simple, schema_test_nested, schema_test_paths collections added for schema tests
 query I
 SELECT COUNT(*) FROM information_schema.tables 
 WHERE table_catalog = 'test_mongo' 
@@ -101,7 +100,7 @@ ORDER BY table_name;
 ----
 deeply_nested
 empty_collection
-matrix
+matrix 
 nested_scalars_test
 object_container_test
 orders
