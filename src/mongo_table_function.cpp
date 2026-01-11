@@ -1301,7 +1301,7 @@ void FlattenDocument(const bsoncxx::document::view &doc, const vector<string> &c
 		} else {
 			// Try direct field access first (O(1) for top-level fields)
 			element = doc[mongo_field_name];
-			
+
 			// If direct access didn't find the field, try iteration as fallback
 			if (!element) {
 				bool found = false;
