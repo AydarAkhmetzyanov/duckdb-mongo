@@ -32,15 +32,12 @@ public:
 	    : DefaultGenerator(catalog), schema(schema), connection_string(connection_string_p),
 	      database_name(database_name_p), collections_loaded(false), mongo_catalog(mongo_catalog_p) {
 		GetMongoInstance();
-		// Pre-warm connection by actually using it (ping the database)
-		// This ensures the connection is fully established before first query
+		// Pre-warm connection by creating the client
+		// This ensures the connection string is validated early, but doesn't force
+		// database access which might fail if database doesn't exist yet
+		// The actual connection will be established on first use
 		try {
-			auto &client = GetOrCreateClient();
-			// Perform a lightweight operation to ensure connection is ready
-			// This reduces cold start time for first query
-			auto db = client[database_name];
-			// List collections is a lightweight operation that forces connection establishment
-			db.list_collection_names();
+			GetOrCreateClient();
 		} catch (...) {
 			// Connection will be established on first actual query if pre-warm fails
 		}
