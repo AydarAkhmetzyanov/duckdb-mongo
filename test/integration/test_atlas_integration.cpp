@@ -54,18 +54,10 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 	                                std::string(hostname) + "?retryWrites=true&w=majority";
 
 	duckdb::DBConfig config;
-	config.options.load_extensions = false; // Disable auto-loading to avoid linking issues with core_functions
+	config.options.load_extensions = true;
 	duckdb::DuckDB db(nullptr, &config);
 	db.LoadStaticExtension<duckdb::MongoExtension>();
 	duckdb::Connection con(db);
-
-	// Try to load core_functions via SQL to avoid linking issues
-	// If LOAD fails (e.g., core_functions is statically linked), try INSTALL first
-	auto load_result = con.Query("LOAD 'core_functions'");
-	if (load_result->HasError()) {
-		con.Query("INSTALL 'core_functions'");
-		load_result = con.Query("LOAD 'core_functions'");
-	}
 
 	// Create or replace a temporary secret for MongoDB Atlas connection (without database name)
 	std::string create_secret_query =
