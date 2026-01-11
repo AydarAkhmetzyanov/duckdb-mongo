@@ -53,9 +53,7 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 	std::string connection_string = "mongodb+srv://" + std::string(username) + ":" + std::string(password) + "@" +
 	                                std::string(hostname) + "?retryWrites=true&w=majority";
 
-	duckdb::DBConfig config;
-	config.options.load_extensions = true;
-	duckdb::DuckDB db(nullptr, &config);
+	duckdb::DuckDB db;
 	db.LoadStaticExtension<duckdb::MongoExtension>();
 	duckdb::Connection con(db);
 
