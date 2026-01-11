@@ -6,7 +6,6 @@
 #include "duckdb/main/query_result.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
 #include "duckdb/common/types.hpp"
-#include "extension/core_functions/include/core_functions_extension.hpp"
 #include "mongo_extension.hpp"
 #include <cstdlib>
 #include <string>
@@ -55,13 +54,18 @@ TEST_CASE("MongoDB Atlas Integration Test", "[mongo][atlas][integration]") {
 	                                std::string(hostname) + "?retryWrites=true&w=majority";
 
 	duckdb::DBConfig config;
-	config.options.load_extensions = false;
+	config.options.load_extensions = false; // Disable auto-loading to avoid linking issues with core_functions
 	duckdb::DuckDB db(nullptr, &config);
 	db.LoadStaticExtension<duckdb::MongoExtension>();
-	// Load core_functions extension manually since we disabled auto-loading
-	// This is needed for functions like in_search_path used by SHOW TABLES
-	db.LoadStaticExtension<duckdb::CoreFunctionsExtension>();
 	duckdb::Connection con(db);
+
+	// Try to load core_functions via SQL to avoid linking issues
+	// If LOAD fails (e.g., core_functions is statically linked), try INSTALL first
+	auto load_result = con.Query("LOAD 'core_functions'");
+	if (load_result->HasError()) {
+		con.Query("INSTALL 'core_functions'");
+		load_result = con.Query("LOAD 'core_functions'");
+	}
 
 	// Create or replace a temporary secret for MongoDB Atlas connection (without database name)
 	std::string create_secret_query =
