@@ -29,6 +29,7 @@
 #include <cctype>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace duckdb {
@@ -1928,6 +1929,7 @@ static const BoundColumnRefExpression *UnwrapCastToColumnRef(const Expression &e
 static string GetMongoPathForColumn(const BoundColumnRefExpression &col_ref, const vector<string> &column_names,
                                     const unordered_map<string, string> &column_name_to_mongo_path) {
 	idx_t col_idx = col_ref.binding.column_index;
+	D_ASSERT(col_idx < column_names.size());
 	if (col_idx >= column_names.size()) {
 		return "";
 	}
@@ -2001,23 +2003,30 @@ static const vector<MongoFunctionMapping> MONGO_FUNCTION_MAPPINGS = {
     // {{"day", "dayofmonth"}, "$dayOfMonth", 1, {}, true},
 };
 
-// Helper function to check if a function name matches any of the given names (case-insensitive)
-static bool IsFunctionName(const string &func_name, const vector<string> &names) {
-	string lower_name = StringUtil::Lower(func_name);
-	for (const auto &name : names) {
-		if (lower_name == StringUtil::Lower(name)) {
-			return true;
+// Case-insensitive map from function name to function mapping
+static unordered_map<string, const MongoFunctionMapping *> BuildFunctionMappingMap() {
+	unordered_map<string, const MongoFunctionMapping *> mapping_map;
+	for (const auto &mapping : MONGO_FUNCTION_MAPPINGS) {
+		for (const auto &name : mapping.duckdb_names) {
+			string lower_name = StringUtil::Lower(name);
+			mapping_map[lower_name] = &mapping;
 		}
 	}
-	return false;
+	return mapping_map;
+}
+
+static const unordered_map<string, const MongoFunctionMapping *> &GetFunctionMappingMap() {
+	static const auto mapping_map = BuildFunctionMappingMap();
+	return mapping_map;
 }
 
 // Helper function to find a function mapping by name
 static const MongoFunctionMapping *FindFunctionMapping(const string &func_name) {
-	for (const auto &mapping : MONGO_FUNCTION_MAPPINGS) {
-		if (IsFunctionName(func_name, mapping.duckdb_names)) {
-			return &mapping;
-		}
+	const auto &mapping_map = GetFunctionMappingMap();
+	string lower_name = StringUtil::Lower(func_name);
+	auto it = mapping_map.find(lower_name);
+	if (it != mapping_map.end()) {
+		return it->second;
 	}
 	return nullptr;
 }
