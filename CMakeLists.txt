@@ -58,6 +58,7 @@ install(
 # Note: This is always built regardless of ENABLE_UNITTEST_CPP_TESTS since it's an extension-specific test
 add_executable(test_atlas_integration
   test/integration/test_atlas_integration.cpp
+  test/integration/extension_helper_stub.cpp
   ${EXTENSION_SOURCES}
 )
 
@@ -81,11 +82,18 @@ else()
 endif()
 
 # Link against DuckDB and MongoDB drivers
+# Also link extension_helper to provide ExtensionHelper::LoadAllExtensions
 target_link_libraries(test_atlas_integration
   duckdb_static
   $<IF:$<TARGET_EXISTS:mongo::mongocxx_static>,mongo::mongocxx_static,mongo::mongocxx_shared>
   $<IF:$<TARGET_EXISTS:mongo::bsoncxx_static>,mongo::bsoncxx_static,mongo::bsoncxx_shared>
 )
+
+# Try to link extension_helper object file if available (for DuckDB main compatibility)
+# This provides ExtensionHelper::LoadAllExtensions which is referenced but may not be in duckdb_static
+if(TARGET duckdb_extension_helper)
+  target_link_libraries(test_atlas_integration duckdb_extension_helper)
+endif()
 
 # Include directories
 target_include_directories(test_atlas_integration PRIVATE
