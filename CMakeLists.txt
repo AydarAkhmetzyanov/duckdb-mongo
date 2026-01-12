@@ -59,27 +59,23 @@ install(
 # Check if LoadAllExtensions exists in DuckDB's extension_helper.cpp
 # In DuckDB v1.4.3 (stable), it exists, so we don't need the stub
 # In DuckDB main, it may not exist, so we need the stub
-include(CheckCXXSourceCompiles)
-set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} duckdb_static)
-check_cxx_source_compiles("
-#include \"duckdb/main/extension_helper.hpp\"
-#include \"duckdb/main/database.hpp\"
-int main() {
-    // Try to take address of LoadAllExtensions - if it exists, this will compile
-    void (*f)(duckdb::DuckDB&) = &duckdb::ExtensionHelper::LoadAllExtensions;
-    return 0;
-}
-" DUCKDB_HAS_LOAD_ALL_EXTENSIONS)
+# We check by looking for the function definition in the source file
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/duckdb/src/main/extension/extension_helper.cpp" EXTENSION_HELPER_CONTENT)
+string(FIND "${EXTENSION_HELPER_CONTENT}" "void ExtensionHelper::LoadAllExtensions" HAS_LOAD_ALL_EXTENSIONS_POS)
 
 add_executable(test_atlas_integration
   test/integration/test_atlas_integration.cpp
   ${EXTENSION_SOURCES}
 )
 
-# Only add the stub if LoadAllExtensions is not available
-if(NOT DUCKDB_HAS_LOAD_ALL_EXTENSIONS)
+# Only add the stub if LoadAllExtensions is not found in the source file
+# If found (HAS_LOAD_ALL_EXTENSIONS_POS >= 0), don't add the stub to avoid duplicate symbols
+if(HAS_LOAD_ALL_EXTENSIONS_POS EQUAL -1)
   target_sources(test_atlas_integration PRIVATE test/integration/extension_helper_stub.cpp)
   target_compile_definitions(test_atlas_integration PRIVATE DUCKDB_MAIN_BUILD=1)
+  message(STATUS "LoadAllExtensions not found in DuckDB source - adding stub")
+else()
+  message(STATUS "LoadAllExtensions found in DuckDB source (position ${HAS_LOAD_ALL_EXTENSIONS_POS}) - stub not needed")
 endif()
 
 # Set output directory - force debug builds to go to build/debug/
