@@ -56,11 +56,31 @@ install(
 # This test is built separately and can be run independently
 # Build the integration test executable
 # Note: This is always built regardless of ENABLE_UNITTEST_CPP_TESTS since it's an extension-specific test
+# Check if LoadAllExtensions exists in DuckDB's extension_helper.cpp
+# In DuckDB v1.4.3 (stable), it exists, so we don't need the stub
+# In DuckDB main, it may not exist, so we need the stub
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} duckdb_static)
+check_cxx_source_compiles("
+#include \"duckdb/main/extension_helper.hpp\"
+#include \"duckdb/main/database.hpp\"
+int main() {
+    // Try to take address of LoadAllExtensions - if it exists, this will compile
+    void (*f)(duckdb::DuckDB&) = &duckdb::ExtensionHelper::LoadAllExtensions;
+    return 0;
+}
+" DUCKDB_HAS_LOAD_ALL_EXTENSIONS)
+
 add_executable(test_atlas_integration
   test/integration/test_atlas_integration.cpp
-  test/integration/extension_helper_stub.cpp
   ${EXTENSION_SOURCES}
 )
+
+# Only add the stub if LoadAllExtensions is not available
+if(NOT DUCKDB_HAS_LOAD_ALL_EXTENSIONS)
+  target_sources(test_atlas_integration PRIVATE test/integration/extension_helper_stub.cpp)
+  target_compile_definitions(test_atlas_integration PRIVATE DUCKDB_MAIN_BUILD=1)
+endif()
 
 # Set output directory - force debug builds to go to build/debug/
 # CMAKE_CURRENT_SOURCE_DIR is the directory containing this CMakeLists.txt (project root)
