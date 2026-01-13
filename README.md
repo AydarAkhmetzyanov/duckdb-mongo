@@ -43,6 +43,7 @@ SELECT * FROM atlas_db.mydb.mycollection;
 - Nested document flattening with underscore-separated names
 - BSON type mapping to DuckDB SQL types
 - **Filter pushdown**: WHERE clauses pushed to MongoDB to leverage indexes
+- **Complex filter pushdown**: Function calls and column-to-column comparisons pushed to MongoDB using `$expr` queries
 - **Projection pushdown**: Only fetches columns used in SELECT clause
 - **Filter prune**: Excludes filter columns from projections when filters are pushed down
 - Optional MongoDB query filters
@@ -754,6 +755,7 @@ For aggregations, filters are pushed down while aggregation happens in DuckDB:
 - **NULL checks**: `IS NULL` and `IS NOT NULL`
 - **Multiple conditions**: AND/OR combinations merged into efficient MongoDB queries
 - **Nested fields**: Flattened fields (e.g., `address_city`) converted to dot notation (`address.city`)
+- **Complex filters**: Function calls (e.g., `LENGTH(name) > 5`) and column-to-column comparisons (e.g., `age > balance`) pushed down as MongoDB `$expr` queries (see [Complex Filter Pushdown](#complex-filter-pushdown))
 
 **Examples:**
 
@@ -838,6 +840,48 @@ EXPLAIN SELECT order_id FROM mongo_test.duckdb_mongo_test.orders WHERE status = 
 ```
 
 The plan shows `Projections: order_id` and `Filters: status='completed' AND total>500.0` in the `MONGO_SCAN` operator, indicating filters are pushed down but filter columns are not fetched.
+
+#### Complex Filter Pushdown
+
+Complex filter pushdown enables pushing complex filter expressions (function calls, column-to-column comparisons, etc.) to MongoDB using `$expr` queries. This allows MongoDB to filter server-side for expressions that cannot be handled by simple TableFilter pushdown.
+
+**Supported Complex Filter Types:**
+
+- **Function calls**: `LENGTH(name) > 5`, `YEAR(created_at) >= 2023`, `MONTH(created_at) = 1`
+- **Column-to-column comparisons**: `age > balance`, `price >= cost`
+- **Combined simple and complex filters**: `age > 25 AND LENGTH(name) > 5`
+
+**How it works:**
+
+- Simple filters (column-to-constant comparisons like `age > 25`) are handled by TableFilter pushdown, which produces faster MongoDB native queries
+- Complex filters (function calls, column-to-column comparisons) are converted to MongoDB `$expr` format and pushed down to MongoDB
+- Both simple and complex filters can be combined in a single query, with each handled by the appropriate pushdown mechanism
+
+**Examples:**
+
+```sql
+-- Function call filter (complex) - pushed down as $expr
+SELECT name, email FROM mongo_test.duckdb_mongo_test.users WHERE LENGTH(name) > 5;
+-- MongoDB: {$expr: {$gt: [{$strLenCP: "$name"}, 5]}}
+
+-- Column-to-column comparison (complex) - pushed down as $expr
+SELECT name, age, balance FROM mongo_test.duckdb_mongo_test.users WHERE age > balance;
+-- MongoDB: {$expr: {$gt: ["$age", "$balance"]}}
+
+-- Combined simple and complex filters
+SELECT name FROM mongo_test.duckdb_mongo_test.users WHERE age > 25 AND LENGTH(name) > 5;
+-- MongoDB: {age: {$gt: 25}, $expr: {$gt: [{$strLenCP: "$name"}, 5]}}
+```
+
+**Use `EXPLAIN` to verify complex filter pushdown:**
+
+```sql
+EXPLAIN SELECT name FROM mongo_test.duckdb_mongo_test.users WHERE LENGTH(name) > 5;
+```
+
+The plan shows `MONGO_SCAN` directly (no `FILTER` operator above it), indicating the complex filter was pushed down to MongoDB.
+
+> **Note:** Complex filter pushdown works alongside simple filter pushdown. Simple filters are always handled by TableFilter pushdown for optimal performance, while complex filters are handled by `$expr` pushdown when needed.
 
 ## Contributing
 
